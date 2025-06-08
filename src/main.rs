@@ -1,11 +1,66 @@
 
 
 
-use std::{any::{Any, TypeId}, collections::HashMap, marker::PhantomData, sync::mpsc::Sender};
+use std::{
+    any::{Any, TypeId},
+    collections::HashMap,
+    marker::PhantomData,
+    sync::mpsc::{channel, Sender},
+};
 
 
 
-fn main() {}
+fn main() {
+    #[derive(Debug)]
+    struct TestState {
+        num: u8,
+        area: Rect,
+    }
+
+    struct TestObj {
+        link: Link<Self>,
+        state: TestState,
+    }
+
+    impl Object for TestObj {
+        type State = TestState;
+
+        fn new(state: Self::State, link: Link<Self>) -> Self {
+            println!("[TestObj::new] state = {:?}", state);
+            Self {
+                link,
+                state,
+            }
+        }
+
+        fn update(&mut self, state: Self::State) -> bool {
+            println!("[TestObj::update] state = {:?}", state);
+            self.state = state;
+            true
+        }
+
+        fn resize(&mut self, area: Rect) -> bool {
+            println!("[TestObj::resize] area = {:?}", area);
+            self.state.area = area;
+            true
+        }
+    }
+
+
+    let (sender, receiver) = channel();
+    let mut tree = Tree {
+        root: TestObj::with_state(TestState {
+            num: 0,
+            area: Rect::ZERO,
+        }),
+        sender: Box::new(sender),
+        objects: HashMap::with_capacity(5),
+    };
+
+    tree.update(Rect::ZERO);
+    tree.update(Rect::ONE);
+    tree.update(Rect::ZERO);
+}
 
 
 
@@ -20,6 +75,14 @@ pub trait Object: Sized + 'static {
     fn update(&mut self, state: Self::State) -> bool;
     fn resize(&mut self, area: Rect) -> bool;
 }
+
+pub trait ObjectExt: Object {
+    fn with_state(state: Self::State) -> Node {
+        Node::with_state::<Self>(state)
+    }
+}
+
+impl<T: Object> ObjectExt for T {}
 
 pub struct Link<T: Object> {
     sender: Box<dyn MessageSender>,
@@ -59,6 +122,11 @@ pub struct Rect {
     pub h: f32,
 }
 
+impl Rect {
+    pub const ZERO: Self = Self { x: 0.0, y: 0.0, w: 0.0, h: 0.0 };
+    pub const ONE: Self = Self { x: 1.0, y: 1.0, w: 1.0, h: 1.0 };
+}
+
 
 
 // --- Utility types
@@ -88,7 +156,6 @@ impl<T: Object> DummyObject for T {
 trait ObjectTemplate {
     fn create(&mut self, sender: Box<dyn MessageSender>) -> Box<dyn DummyObject + 'static>;
     fn id(&self) -> Id;
-    fn state(&mut self) -> Box<dyn Any>;
 }
 
 struct ObjectDef<T: Object> {
@@ -118,11 +185,6 @@ impl<T: Object> ObjectTemplate for ObjectDef<T> {
     #[inline]
     fn id(&self) -> Id {
         Id(TypeId::of::<T>())
-    }
-
-    #[inline]
-    fn state(&mut self) -> Box<dyn Any> {
-        Box::new(self.take_state())
     }
 }
 
@@ -161,6 +223,7 @@ impl Tree {
             let id = template.id();
             let mut newly_created = false;
             let tree_object = objects.entry(id).or_insert_with(|| {
+                println!("Creating new object #{id:?}...");
                 let dummy = template.create(sender.clone_box());
                 newly_created = true;
                 TreeObject {
@@ -170,9 +233,8 @@ impl Tree {
             });
 
             if !newly_created {
-                let mut changed = tree_object.dummy.update(template.state());
                 if area != tree_object.area {
-                    changed = tree_object.dummy.resize(area) || changed;
+                    let _changed = tree_object.resize(area);
                 }
             }
         });
@@ -214,6 +276,13 @@ impl NodeInner {
 struct TreeObject {
     dummy: Box<dyn DummyObject>,
     area: Rect,
+}
+
+impl TreeObject {
+    pub fn resize(&mut self, area: Rect) -> bool {
+        self.area = area;
+        self.dummy.resize(area)
+    }
 }
 
 struct ObjectNode<'a> {
