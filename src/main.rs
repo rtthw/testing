@@ -1,7 +1,7 @@
 
 
 
-use std::{any::{Any, TypeId}, collections::HashMap};
+use std::{any::{Any, TypeId}, collections::HashMap, marker::PhantomData, sync::mpsc::Sender};
 
 
 
@@ -13,12 +13,38 @@ fn main() {}
 
 
 
-pub trait Object: 'static {
+pub trait Object: Sized + 'static {
     type State;
 
-    fn new(state: Self::State) -> Self;
+    fn new(state: Self::State, link: Link<Self>) -> Self;
     fn update(&mut self, state: Self::State) -> bool;
     fn resize(&mut self, area: Rect) -> bool;
+}
+
+pub struct Link<T: Object> {
+    sender: Box<dyn MessageSender>,
+    _object: PhantomData<T>,
+}
+
+impl<T: Object> Link<T> {
+    fn new(sender: Box<dyn MessageSender>) -> Self {
+        Self {
+            sender,
+            _object: PhantomData,
+        }
+    }
+
+    pub fn send(&self, message: impl Message + 'static) {
+        self.sender.send(Box::new(message));
+    }
+}
+
+pub trait Message: Send {}
+
+pub trait MessageSender: Send + 'static {
+    fn send(&self, message: Box<dyn Message>);
+
+    fn clone_box(&self) -> Box<dyn MessageSender>;
 }
 
 // TODO: Separate IDs for objects of the same type.
@@ -60,7 +86,7 @@ impl<T: Object> DummyObject for T {
 }
 
 trait ObjectTemplate {
-    fn create(&mut self) -> Box<dyn DummyObject + 'static>;
+    fn create(&mut self, sender: Box<dyn MessageSender>) -> Box<dyn DummyObject + 'static>;
     fn id(&self) -> Id;
     fn state(&mut self) -> Box<dyn Any>;
 }
@@ -70,6 +96,12 @@ struct ObjectDef<T: Object> {
 }
 
 impl<T: Object> ObjectDef<T> {
+    fn new(state: T::State) -> Self {
+        Self {
+            state: Some(state),
+        }
+    }
+
     fn take_state(&mut self) -> T::State {
         let mut state = None;
         std::mem::swap(&mut state, &mut self.state);
@@ -79,8 +111,8 @@ impl<T: Object> ObjectDef<T> {
 
 impl<T: Object> ObjectTemplate for ObjectDef<T> {
     #[inline]
-    fn create(&mut self) -> Box<dyn DummyObject + 'static> {
-        Box::new(T::new(self.take_state()))
+    fn create(&mut self, sender: Box<dyn MessageSender>) -> Box<dyn DummyObject + 'static> {
+        Box::new(T::new(self.take_state(), Link::new(sender)))
     }
 
     #[inline]
@@ -94,6 +126,17 @@ impl<T: Object> ObjectTemplate for ObjectDef<T> {
     }
 }
 
+impl MessageSender for Sender<Box<dyn Message>> {
+    fn send(&self, message: Box<dyn Message>) {
+        self.send(message)
+            .expect("receiver needs to outlive senders for inter-component messaging");
+    }
+
+    fn clone_box(&self) -> Box<dyn MessageSender> {
+        Box::new(self.clone())
+    }
+}
+
 
 
 // --- Implementation
@@ -103,17 +146,22 @@ impl<T: Object> ObjectTemplate for ObjectDef<T> {
 pub struct Tree {
     root: Node,
     objects: HashMap<Id, TreeObject>,
+    sender: Box<dyn MessageSender>,
 }
 
 impl Tree {
     pub fn update(&mut self, area: Rect) {
-        let Tree { root, objects } = self;
+        let Tree {
+            ref mut root,
+            ref mut objects,
+            ref sender,
+        } = *self;
 
-        root.crawl(area, &mut | ObjectNode { template, area } | {
+        root.0.crawl(area, &mut | ObjectNode { template, area } | {
             let id = template.id();
             let mut newly_created = false;
             let tree_object = objects.entry(id).or_insert_with(|| {
-                let dummy = template.create();
+                let dummy = template.create(sender.clone_box());
                 newly_created = true;
                 TreeObject {
                     dummy,
@@ -131,17 +179,20 @@ impl Tree {
     }
 }
 
-struct TreeObject {
-    dummy: Box<dyn DummyObject>,
-    area: Rect,
+pub struct Node(NodeInner);
+
+impl Node {
+    pub fn with_state<T: Object>(state: T::State) -> Self {
+        Self(NodeInner::Object(Box::new(ObjectDef::<T>::new(state))))
+    }
 }
 
-enum Node {
-    Container(Vec<Node>),
+enum NodeInner {
+    Container(Vec<NodeInner>),
     Object(Box<dyn ObjectTemplate>),
 }
 
-impl Node {
+impl NodeInner {
     fn crawl(&mut self, area: Rect, func: &mut impl FnMut(ObjectNode)) {
         match self {
             Self::Container(nodes) => {
@@ -158,6 +209,11 @@ impl Node {
             }
         }
     }
+}
+
+struct TreeObject {
+    dummy: Box<dyn DummyObject>,
+    area: Rect,
 }
 
 struct ObjectNode<'a> {
