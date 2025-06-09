@@ -1,7 +1,7 @@
 
 
 
-use std::{any::TypeId, marker::PhantomData};
+use std::{any::TypeId, borrow::Borrow, fmt::Debug};
 
 
 
@@ -13,18 +13,42 @@ fn main() {}
 
 
 
-pub trait Object: Sized + 'static {
-    type State;
-
-    fn update(&mut self, state: Self::State) -> bool;
-    fn resize(&mut self, area: Rect) -> bool;
-
-    fn build(&self) -> Node {
-        Node::leaf::<Self>()
+pub trait Object: Debug + 'static {
+    fn tag(&self) -> Tag {
+        Tag::untyped()
     }
 
     fn diff(&self, node: &mut Node) {
         node.children.clear();
+    }
+
+    fn children(&self) -> Vec<Node> {
+        Vec::new()
+    }
+}
+
+#[derive(Debug)]
+pub struct DynObject {
+    object: Box<dyn Object>,
+}
+
+impl DynObject {
+    pub fn new(object: impl Object) -> Self {
+        Self {
+            object: Box::new(object),
+        }
+    }
+}
+
+impl<'a> Borrow<dyn Object + 'a> for DynObject {
+    fn borrow(&self) -> &(dyn Object + 'a) {
+        self.object.borrow()
+    }
+}
+
+impl<'a> Borrow<dyn Object + 'a> for &DynObject {
+    fn borrow(&self) -> &(dyn Object + 'a) {
+        self.object.borrow()
     }
 }
 
@@ -39,7 +63,7 @@ impl Default for Tag {
 
 impl Tag {
     #[inline]
-    pub fn typed<T: 'static>() -> Self {
+    pub fn typed<T: ?Sized + 'static>() -> Self {
         Self(TypeId::of::<T>())
     }
 
@@ -68,56 +92,114 @@ impl Rect {
 
 
 
-trait NodeObject {}
-
-struct ObjectNodeDef<T: Object> {
-    _obj: PhantomData<T>,
-}
-
-impl<T: Object> NodeObject for ObjectNodeDef<T> {}
-
-impl<T: Object> ObjectNodeDef<T> {
-    fn new() -> Self {
-        Self {
-            _obj: PhantomData,
-        }
-    }
-}
-
-
-
 // --- Implementation
 
 
 
+#[derive(Debug)]
 pub struct Node {
     tag: Tag,
-    object: Box<dyn NodeObject>,
     pub children: Vec<Node>,
 }
 
+impl PartialEq for Node {
+    fn eq(&self, other: &Self) -> bool {
+        self.tag == other.tag
+            && self.children == other.children
+    }
+}
+
 impl Node {
-    pub fn leaf<T: Object>() -> Self {
+    pub fn new<'a, T: Borrow<dyn Object> + 'a>(object: T) -> Self {
+        let object = object.borrow();
         Self {
-            tag: Tag::typed::<T>(),
-            object: Box::new(ObjectNodeDef::<T>::new()),
-            children: vec![],
+            tag: object.tag(),
+            children: object.children(),
         }
     }
 
-    pub fn branch<T: Object>(children: impl IntoIterator<Item = Node>) -> Self {
-        Self {
-            tag: Tag::typed::<T>(),
-            object: Box::new(ObjectNodeDef::<T>::new()),
-            children: children.into_iter().collect(),
-        }
-    }
-
-    pub fn diff<T: Object>(&mut self, new: &T) {
-        if self.tag == Tag::typed::<T>() {
-            new.diff(self);
+    pub fn diff<'a, T: Borrow<dyn Object> + 'a>(&mut self, new: T) {
+        if self.tag == new.borrow().tag() {
+            new.borrow().diff(self);
         } else {
-            *self = new.build();
+            *self = Self::new(new);
         }
+    }
+
+    pub fn diff_children<'a, T: Borrow<dyn Object> + 'a>(&mut self, new_children: &[T]) {
+        self.diff_children_custom(
+            new_children,
+            |node, object| node.diff(object.borrow()),
+            |object| Self::new(object.borrow()),
+        );
+    }
+
+    pub fn diff_children_custom<T>(
+        &mut self,
+        new_children: &[T],
+        diff: impl Fn(&mut Node, &T),
+        new_state: impl Fn(&T) -> Self,
+    ) {
+        if self.children.len() > new_children.len() {
+            self.children.truncate(new_children.len());
+        }
+
+        for (child_state, new) in self.children.iter_mut().zip(new_children.iter()) {
+            diff(child_state, new);
+        }
+
+        if self.children.len() < new_children.len() {
+            self.children.extend(
+                new_children[self.children.len()..].iter().map(new_state),
+            );
+        }
+    }
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct A;
+    #[derive(Debug)]
+    struct B;
+    #[derive(Debug)]
+    struct C {
+        children: Vec<DynObject>,
+    }
+
+    impl Object for A {}
+    impl Object for B {}
+
+    impl Object for C {
+        fn diff(&self, node: &mut Node) {
+            node.diff_children(&self.children);
+        }
+    }
+
+    #[test]
+    fn simple_diffing() {
+        let a = DynObject::new(A);
+        let b = DynObject::new(B);
+        let mut node_a = Node::new(&a);
+        let node_b = Node::new(&b);
+
+        node_a.diff(&b);
+        assert_eq!(node_a, node_b);
+
+        node_a.diff(&a);
+        assert_eq!(node_a, Node::new(a));
+        assert_ne!(node_a, Node::new(b));
+    }
+
+    #[test]
+    fn children_diffing() {
+        let c = DynObject::new(C {
+            children: vec![DynObject::new(A), DynObject::new(B)]
+        });
+        let mut node_c = Node::new(&c);
     }
 }
