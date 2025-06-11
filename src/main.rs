@@ -127,6 +127,15 @@ impl Tree {
             .filter_map(|o| o.downcast_mut::<Box<dyn Update<Context = C>>>())
             .for_each(|o| pass.process(o));
     }
+
+    fn handle_event(&mut self, event: Event) {
+        let mut pass = EventPass::begin(event);
+        self.objects
+            .iter_mut()
+            .filter_map(|o| o.downcast_mut::<Box<dyn EventHandler<Event>>>())
+            .for_each(|o| { pass.process(o); });
+        pass.end();
+    }
 }
 
 
@@ -138,6 +147,7 @@ pub struct App {
 pub enum AppInput {
     RenderRequest,
     UpdateRequest,
+    Event(Event),
 }
 
 impl Process for App {
@@ -161,6 +171,48 @@ impl Process for App {
                 let mut pass = UpdatePass::begin(&mut nothing);
                 self.tree.update(&mut pass);
             }
+            AppInput::Event(event) => {
+                self.tree.handle_event(event);
+            }
         }
+    }
+}
+
+
+
+pub trait EventHandler<E> {
+    fn handle_event(&mut self, event: E) -> bool { false }
+}
+
+impl<E> EventHandler<E> for Box<dyn EventHandler<E>> {
+    fn handle_event(&mut self, event: E) -> bool {
+        self.as_mut().handle_event(event)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum Event {
+    SomethingHappened(u8),
+}
+
+pub struct EventPass<'e, E> {
+    event: E,
+    _handler: PhantomData<&'e ()>,
+}
+
+impl<'e, E: Copy + 'e> Process for EventPass<'e, E> {
+    type Args = E;
+    type Input = &'e mut dyn EventHandler<E>;
+    type Output = bool;
+
+    fn begin(args: Self::Args) -> Self {
+        Self {
+            event: args,
+            _handler: PhantomData,
+        }
+    }
+
+    fn process(&mut self, input: Self::Input) -> Self::Output {
+        input.handle_event(self.event)
     }
 }
