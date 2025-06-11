@@ -36,7 +36,11 @@ pub trait Process {
 
 
 pub struct RenderPass<'pass> {
-    _pass: &'pass mut PhantomData<()>,
+    renderer: Renderer<'pass>,
+}
+
+pub struct Renderer<'pass> {
+    pass: &'pass mut Vec<u8>, // Pretend this is a rendering pass.
 }
 
 pub trait Render {
@@ -50,13 +54,13 @@ impl Render for Box<dyn Render> {
 }
 
 impl<'pass> Process for RenderPass<'pass> {
-    type Args = &'pass mut PhantomData<()>;
+    type Args = Renderer<'pass>;
     type Input = &'pass mut dyn Render;
     type Output = ();
 
     fn begin(args: Self::Args) -> Self {
         Self {
-            _pass: args,
+            renderer: args,
         }
     }
 
@@ -103,26 +107,60 @@ impl<'c, C> Process for UpdatePass<'c, C> {
 
 
 
-struct Tree {
+pub struct Tree {
     objects: Vec<Box<dyn Any>>,
 }
 
 impl Tree {
-    fn render<'pass>(&'pass mut self, pass: &'pass mut RenderPass<'pass>) {
-        for renderable in self.objects
+    fn render(&mut self, render_pass: &mut Vec<u8>) {
+        let mut pass = RenderPass::begin(Renderer { pass: render_pass });
+        self.objects
             .iter_mut()
             .filter_map(|o| o.downcast_mut::<Box<dyn Render>>())
-        {
-            pass.process(renderable)
-        }
+            .for_each(|o| pass.process(o));
+        pass.end();
     }
 
     fn update<'pass, C: 'static>(&'pass mut self, pass: &'pass mut UpdatePass<'pass, C>) {
-        for updateable in self.objects
+        self.objects
             .iter_mut()
             .filter_map(|o| o.downcast_mut::<Box<dyn Update<Context = C>>>())
-        {
-            pass.process(updateable)
+            .for_each(|o| pass.process(o));
+    }
+}
+
+
+
+pub struct App {
+    tree: Tree,
+}
+
+pub enum AppInput {
+    RenderRequest,
+    UpdateRequest,
+}
+
+impl Process for App {
+    type Args = Tree;
+    type Input = AppInput;
+    type Output = ();
+
+    fn begin(args: Self::Args) -> Self {
+        Self {
+            tree: args,
+        }
+    }
+
+    fn process(&mut self, input: Self::Input) -> Self::Output {
+        match input {
+            AppInput::RenderRequest => {
+                self.tree.render(&mut vec![]);
+            }
+            AppInput::UpdateRequest => {
+                let mut nothing = ();
+                let mut pass = UpdatePass::begin(&mut nothing);
+                self.tree.update(&mut pass);
+            }
         }
     }
 }
