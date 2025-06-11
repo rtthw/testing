@@ -7,4 +7,7 @@ edition = "2024"
 
 
 [[example]]
-name = "object_tree"
+name = "object_tree_1"
+
+[[example]]
+name = "object_tree_2"
