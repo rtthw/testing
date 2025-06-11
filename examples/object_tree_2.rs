@@ -40,6 +40,14 @@ impl DynObject {
     }
 }
 
+impl Into<DynObject> for Box<dyn Object> {
+    fn into(self) -> DynObject {
+        DynObject {
+            object: self,
+        }
+    }
+}
+
 impl<'a> Borrow<dyn Object + 'a> for DynObject {
     fn borrow(&self) -> &(dyn Object + 'a) {
         self.object.borrow()
