@@ -11,48 +11,42 @@ use std::{
 
 
 fn main() {
-    #[derive(Debug)]
-    struct TestState {
+    struct TestMessage {
         num: u8,
-        area: Rect,
     }
+
+    impl Message for TestMessage {}
 
     struct TestObj {
         link: Link<Self>,
-        state: TestState,
     }
 
     impl Object for TestObj {
-        type State = TestState;
+        type Message = TestMessage;
 
-        fn new(state: Self::State, link: Link<Self>) -> Self {
-            println!("[TestObj::new] state = {:?}", state);
+        fn new(link: Link<Self>) -> Self {
+            println!("[TestObj::new]");
             Self {
                 link,
-                state,
             }
         }
 
-        fn update(&mut self, state: Self::State) -> bool {
-            println!("[TestObj::update] state = {:?}", state);
-            self.state = state;
+        fn update(&mut self, message: Self::Message) -> bool {
+            println!("[TestObj::update] message = {}", message.num);
             true
         }
 
         fn resize(&mut self, area: Rect) -> bool {
             println!("[TestObj::resize] area = {:?}", area);
-            self.state.area = area;
+            self.link.send(TestMessage { num: area.w as u8 });
             true
         }
     }
 
 
-    let (sender, receiver) = channel();
+    let (sender, _receiver) = channel();
     let mut tree = Tree {
-        root: TestObj::with_state(TestState {
-            num: 0,
-            area: Rect::ZERO,
-        }),
+        root: TestObj::node(),
         sender: Box::new(sender),
         objects: HashMap::with_capacity(5),
     };
@@ -69,16 +63,16 @@ fn main() {
 
 
 pub trait Object: Sized + 'static {
-    type State;
+    type Message;
 
-    fn new(state: Self::State, link: Link<Self>) -> Self;
-    fn update(&mut self, state: Self::State) -> bool;
+    fn new(link: Link<Self>) -> Self;
+    fn update(&mut self, message: Self::Message) -> bool;
     fn resize(&mut self, area: Rect) -> bool;
 }
 
 pub trait ObjectExt: Object {
-    fn with_state(state: Self::State) -> Node {
-        Node::with_state::<Self>(state)
+    fn node() -> Node {
+        Node::new::<Self>()
     }
 }
 
@@ -110,6 +104,11 @@ pub trait MessageSender: Send + 'static {
     fn clone_box(&self) -> Box<dyn MessageSender>;
 }
 
+pub struct MessagePacket {
+    object_id: Id,
+    message: Box<dyn Any>,
+}
+
 // TODO: Separate IDs for objects of the same type.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Id(TypeId);
@@ -134,16 +133,16 @@ impl Rect {
 
 
 trait DummyObject {
-    fn update(&mut self, state: Box<dyn Any>) -> bool;
+    fn update(&mut self, message: Box<dyn Any>) -> bool;
     fn resize(&mut self, area: Rect) -> bool;
 }
 
 impl<T: Object> DummyObject for T {
     #[inline]
-    fn update(&mut self, state: Box<dyn Any>) -> bool {
+    fn update(&mut self, message: Box<dyn Any>) -> bool {
         <Self as Object>::update(
             self,
-            *state.downcast().expect("incorrect object state type when downcasting"),
+            *message.downcast().expect("incorrect object message type when downcasting"),
         )
     }
 
@@ -159,27 +158,21 @@ trait ObjectTemplate {
 }
 
 struct ObjectDef<T: Object> {
-    state: Option<T::State>,
+    _obj: PhantomData<T>,
 }
 
 impl<T: Object> ObjectDef<T> {
-    fn new(state: T::State) -> Self {
+    fn new() -> Self {
         Self {
-            state: Some(state),
+            _obj: PhantomData,
         }
-    }
-
-    fn take_state(&mut self) -> T::State {
-        let mut state = None;
-        std::mem::swap(&mut state, &mut self.state);
-        state.expect("should work")
     }
 }
 
 impl<T: Object> ObjectTemplate for ObjectDef<T> {
     #[inline]
     fn create(&mut self, sender: Box<dyn MessageSender>) -> Box<dyn DummyObject + 'static> {
-        Box::new(T::new(self.take_state(), Link::new(sender)))
+        Box::new(T::new(Link::new(sender)))
     }
 
     #[inline]
@@ -239,26 +232,46 @@ impl Tree {
             }
         });
     }
+
+    pub fn handle_message(&mut self, message: MessagePacket) {
+        self.objects.get_mut(&message.object_id)
+            .map(|o| o.dummy.update(message.message))
+            .unwrap();
+    }
 }
 
 pub struct Node(NodeInner);
 
 impl Node {
-    pub fn with_state<T: Object>(state: T::State) -> Self {
-        Self(NodeInner::Object(Box::new(ObjectDef::<T>::new(state))))
+    pub fn new<T: Object>() -> Self {
+        Self(NodeInner::Object(Box::new(ObjectDef::<T>::new())))
+    }
+
+    pub fn with<T: Object>(children: impl IntoIterator<Item = Node>) -> Self {
+        Self(NodeInner::Container {
+            object: Box::new(ObjectDef::<T>::new()),
+            children: children.into_iter().map(|n| n.0).collect(),
+        })
     }
 }
 
 enum NodeInner {
-    Container(Vec<NodeInner>),
+    Container {
+        object: Box<dyn ObjectTemplate>,
+        children: Vec<NodeInner>
+    },
     Object(Box<dyn ObjectTemplate>),
 }
 
 impl NodeInner {
     fn crawl(&mut self, area: Rect, func: &mut impl FnMut(ObjectNode)) {
         match self {
-            Self::Container(nodes) => {
-                for child in nodes.iter_mut() {
+            Self::Container { object, children } => {
+                func(ObjectNode {
+                    template: object,
+                    area,
+                });
+                for child in children.iter_mut() {
                     // TODO: Do layout here.
                     child.crawl(area, func);
                 }
