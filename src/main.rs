@@ -1,12 +1,34 @@
 
 
 
-use std::marker::PhantomData;
+use std::{any::{Any, TypeId}, marker::PhantomData};
 
 
+macro_rules! impl_upcast {
+    ($(dyn $type:path),+) => {
+        fn upcast_mut(&mut self, id: TypeId) -> Option<&mut dyn Any> {
+            if false {
+               None
+            }
+            $(
+                else if id == TypeId::of::<dyn $type>() {
+                    Some(unsafe { core::mem::transmute::<&mut dyn $type, &mut dyn Any>(
+                        self as &mut dyn $type
+                    ) })
+                }
+            )*
+            else {
+                None
+            }
+        }
+    }
+}
 
 fn main() {
     struct A;
+    impl Upcast for A {
+        impl_upcast!(dyn Render);
+    }
     impl Render for A {
         fn render(&mut self, pass: &mut RenderPass) {
             println!("Rendering A");
@@ -14,6 +36,9 @@ fn main() {
         }
     }
     struct B;
+    impl Upcast for B {
+        impl_upcast!(dyn Render);
+    }
     impl Render for B {
         fn render(&mut self, pass: &mut RenderPass) {
             println!("Rendering B");
@@ -21,10 +46,25 @@ fn main() {
         }
     }
     struct C;
-    impl Object for C {}
+    impl Upcast for C {
+        // C implements Render, but it isn't declared, so it won't be called.
+        impl_upcast!(dyn EventHandler<Event>);
+    }
+    impl Render for C {
+        fn render(&mut self, pass: &mut RenderPass) {
+            println!("Rendering C");
+            pass.renderer.pass.push(3);
+        }
+    }
+    impl EventHandler<Event> for C {
+        fn handle_event(&mut self, event: Event) -> bool {
+            println!("Handling {:?} @ C", event);
+            true
+        }
+    }
 
 
-    let mut objects: Vec<Box<dyn Object>> = vec![];
+    let mut objects: Vec<Box<dyn Upcast>> = vec![];
     objects.push(Box::new(A));
     objects.push(Box::new(B));
     objects.push(Box::new(C));
@@ -40,9 +80,6 @@ fn main() {
 
 
 
-pub trait Object {
-    fn as_render(&mut self) -> Option<&mut dyn Render> { None }
-}
 
 pub trait Process {
     type Args;
@@ -60,10 +97,8 @@ pub trait Process {
 
 
 
-impl<T: Render> Object for T {
-    fn as_render(&mut self) -> Option<&mut dyn Render> {
-        Some(self)
-    }
+pub trait Upcast {
+    fn upcast_mut(&mut self, id: TypeId) -> Option<&mut dyn Any>;
 }
 
 
@@ -145,7 +180,7 @@ impl<'c, C> Process for UpdatePass<'c, C> {
 
 
 pub struct Tree {
-    pub objects: Vec<Box<dyn Object>>,
+    pub objects: Vec<Box<dyn Upcast>>,
 }
 
 impl Tree {
@@ -153,7 +188,13 @@ impl Tree {
         let mut pass = RenderPass::begin(Renderer { pass: render_pass });
         self.objects
             .iter_mut()
-            .filter_map(|o| o.as_render())
+            .filter_map(|obj| {
+                unsafe {
+                    obj.as_mut()
+                        .upcast_mut(TypeId::of::<dyn Render>())
+                        .map(|dst| core::mem::transmute::<&mut dyn Any, &mut dyn Render>(dst))
+                }
+            })
             .for_each(|o| pass.process(o));
         pass.end();
     }
@@ -228,7 +269,7 @@ impl<E> EventHandler<E> for Box<dyn EventHandler<E>> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Event {
     SomethingHappened(u8),
 }
