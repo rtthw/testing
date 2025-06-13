@@ -1,11 +1,38 @@
 
 
 
-use std::{any::Any, marker::PhantomData};
+use std::marker::PhantomData;
 
 
 
-fn main() {}
+fn main() {
+    struct A;
+    impl Render for A {
+        fn render(&mut self, pass: &mut RenderPass) {
+            println!("Rendering A");
+            pass.renderer.pass.push(1);
+        }
+    }
+    struct B;
+    impl Render for B {
+        fn render(&mut self, pass: &mut RenderPass) {
+            println!("Rendering B");
+            pass.renderer.pass.push(2);
+        }
+    }
+    struct C;
+    impl Object for C {}
+
+
+    let mut objects: Vec<Box<dyn Object>> = vec![];
+    objects.push(Box::new(A));
+    objects.push(Box::new(B));
+    objects.push(Box::new(C));
+
+    let mut app = App::begin(Tree { objects });
+
+    app.process(AppInput::RenderRequest);
+}
 
 
 
@@ -13,7 +40,9 @@ fn main() {}
 
 
 
-pub trait Object: 'static {}
+pub trait Object {
+    fn as_render(&mut self) -> Option<&mut dyn Render> { None }
+}
 
 pub trait Process {
     type Args;
@@ -28,6 +57,14 @@ pub trait Process {
 
 
 // --- Utility types
+
+
+
+impl<T: Render> Object for T {
+    fn as_render(&mut self) -> Option<&mut dyn Render> {
+        Some(self)
+    }
+}
 
 
 
@@ -108,7 +145,7 @@ impl<'c, C> Process for UpdatePass<'c, C> {
 
 
 pub struct Tree {
-    objects: Vec<Box<dyn Any>>,
+    pub objects: Vec<Box<dyn Object>>,
 }
 
 impl Tree {
@@ -116,26 +153,26 @@ impl Tree {
         let mut pass = RenderPass::begin(Renderer { pass: render_pass });
         self.objects
             .iter_mut()
-            .filter_map(|o| o.downcast_mut::<Box<dyn Render>>())
+            .filter_map(|o| o.as_render())
             .for_each(|o| pass.process(o));
         pass.end();
     }
 
-    fn update<'pass, C: 'static>(&'pass mut self, pass: &'pass mut UpdatePass<'pass, C>) {
-        self.objects
-            .iter_mut()
-            .filter_map(|o| o.downcast_mut::<Box<dyn Update<Context = C>>>())
-            .for_each(|o| pass.process(o));
-    }
+    // fn update<'pass, C: 'static>(&'pass mut self, pass: &'pass mut UpdatePass<'pass, C>) {
+    //     self.objects
+    //         .iter_mut()
+    //         .filter_map(|o| o.as_mut().downcast_mut::<Box<dyn Update<Context = C>>>())
+    //         .for_each(|o| pass.process(o));
+    // }
 
-    fn handle_event(&mut self, event: Event) {
-        let mut pass = EventPass::begin(event);
-        self.objects
-            .iter_mut()
-            .filter_map(|o| o.downcast_mut::<Box<dyn EventHandler<Event>>>())
-            .for_each(|o| { pass.process(o); });
-        pass.end();
-    }
+    // fn handle_event(&mut self, event: Event) {
+    //     let mut pass = EventPass::begin(event);
+    //     self.objects
+    //         .iter_mut()
+    //         .filter_map(|o| o.as_mut().downcast_mut::<Box<dyn EventHandler<Event>>>())
+    //         .for_each(|o| { pass.process(o); });
+    //     pass.end();
+    // }
 }
 
 
@@ -146,8 +183,8 @@ pub struct App {
 
 pub enum AppInput {
     RenderRequest,
-    UpdateRequest,
-    Event(Event),
+    // UpdateRequest,
+    // Event(Event),
 }
 
 impl Process for App {
@@ -166,14 +203,14 @@ impl Process for App {
             AppInput::RenderRequest => {
                 self.tree.render(&mut vec![]);
             }
-            AppInput::UpdateRequest => {
-                let mut nothing = ();
-                let mut pass = UpdatePass::begin(&mut nothing);
-                self.tree.update(&mut pass);
-            }
-            AppInput::Event(event) => {
-                self.tree.handle_event(event);
-            }
+            // AppInput::UpdateRequest => {
+            //     let mut nothing = ();
+            //     let mut pass = UpdatePass::begin(&mut nothing);
+            //     self.tree.update(&mut pass);
+            // }
+            // AppInput::Event(event) => {
+            //     self.tree.handle_event(event);
+            // }
         }
     }
 }
@@ -181,6 +218,7 @@ impl Process for App {
 
 
 pub trait EventHandler<E> {
+    #[allow(unused)]
     fn handle_event(&mut self, event: E) -> bool { false }
 }
 
