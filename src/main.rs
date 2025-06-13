@@ -5,20 +5,22 @@ use std::{any::{Any, TypeId}, marker::PhantomData};
 
 
 macro_rules! impl_upcast {
-    ($(dyn $type:path),+) => {
-        fn upcast_mut(&mut self, id: TypeId) -> Option<&mut dyn Any> {
-            if false {
-               None
-            }
-            $(
-                else if id == TypeId::of::<dyn $type>() {
-                    Some(unsafe { core::mem::transmute::<&mut dyn $type, &mut dyn Any>(
-                        self as &mut dyn $type
-                    ) })
-                }
-            )*
-            else {
+    ($name:ty; $($type:path),+) => {
+        impl Upcast for $name {
+            fn upcast_mut(&mut self, id: TypeId) -> Option<&mut dyn Any> {
+                if false {
                 None
+                }
+                $(
+                    else if id == TypeId::of::<dyn $type>() {
+                        Some(unsafe { core::mem::transmute::<&mut dyn $type, &mut dyn Any>(
+                            self as &mut dyn $type
+                        ) })
+                    }
+                )*
+                else {
+                    None
+                }
             }
         }
     }
@@ -26,30 +28,29 @@ macro_rules! impl_upcast {
 
 fn main() {
     struct A;
-    impl Upcast for A {
-        impl_upcast!(dyn Render);
-    }
+    impl_upcast!(A; Render);
+
     impl Render for A {
         fn render(&mut self, pass: &mut RenderPass) {
             println!("Rendering A");
             pass.renderer.pass.push(1);
         }
     }
+
     struct B;
-    impl Upcast for B {
-        impl_upcast!(dyn Render);
-    }
+    impl_upcast!(B; Render);
+
     impl Render for B {
         fn render(&mut self, pass: &mut RenderPass) {
             println!("Rendering B");
             pass.renderer.pass.push(2);
         }
     }
+
     struct C;
-    impl Upcast for C {
-        // C implements Render, but it isn't declared, so it won't be called.
-        impl_upcast!(dyn EventHandler<Event>);
-    }
+    // C implements Render, but it isn't declared, so it won't be called.
+    impl_upcast!(C; EventHandler<Event>);
+
     impl Render for C {
         fn render(&mut self, pass: &mut RenderPass) {
             println!("Rendering C");
