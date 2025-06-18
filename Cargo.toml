@@ -11,3 +11,6 @@ name = "object_tree_1"
 
 [[example]]
 name = "object_tree_2"
+
+[[example]]
+name = "object_tree_3"
