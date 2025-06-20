@@ -7,6 +7,9 @@ edition = "2024"
 
 
 [[example]]
+name = "function_dropper_1"
+
+[[example]]
 name = "object_tree_1"
 
 [[example]]
