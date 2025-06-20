@@ -9,7 +9,7 @@ macro_rules! impl_upcast {
         impl Upcast for $name {
             fn upcast_mut(&mut self, id: TypeId) -> Option<&mut dyn Any> {
                 if false {
-                None
+                    None
                 }
                 $(
                     else if id == TypeId::of::<dyn $type>() {
