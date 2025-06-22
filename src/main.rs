@@ -25,7 +25,7 @@ fn main() {
 
     editor.render(&mut renderer);
 
-    if let Some(cb) = editor.event(Event::Click) {
+    if let EventResult::Consumed(Some(cb)) = editor.event(Event::Click) {
         (cb.0)(&mut state)
     }
 
@@ -34,7 +34,7 @@ fn main() {
         keys: 0,
     });
 
-    if let Some(cb) = editor.event(Event::Key) {
+    if let EventResult::Consumed(Some(cb)) = editor.event(Event::Key) {
         (cb.0)(&mut state)
     }
 
@@ -70,14 +70,37 @@ impl Callback {
     }
 }
 
-trait Element {
+pub trait Element {
     fn render(&self, renderer: &mut u8);
-    fn event(&mut self, event: Event) -> Option<Callback>;
+    fn event(&mut self, event: Event) -> EventResult;
 }
 
-enum Event {
+#[derive(Debug, PartialEq)]
+pub enum Event {
     Click,
     Key,
+}
+
+pub enum EventResult {
+    Ignored,
+    Consumed(Option<Callback>),
+}
+
+impl EventResult {
+    pub fn and(self, other: Self) -> Self {
+        match (self, other) {
+            (EventResult::Ignored, result)
+            | (result, EventResult::Ignored) => result,
+            (EventResult::Consumed(None), EventResult::Consumed(cb))
+            | (EventResult::Consumed(cb), EventResult::Consumed(None)) => EventResult::Consumed(cb),
+            (EventResult::Consumed(Some(cb1)), EventResult::Consumed(Some(cb2))) => {
+                EventResult::Consumed(Some(Callback::new(move |state| {
+                    (cb1.0)(state);
+                    (cb2.0)(state);
+                })))
+            }
+        }
+    }
 }
 
 
@@ -86,7 +109,34 @@ enum Event {
 
 
 
+pub struct OnEvent<E> {
+    element: E,
+    callbacks: Vec<(Event, OnEventCallback<E>)>,
+}
 
+type OnEventCallback<T> = Arc<Box<dyn Fn(&mut T, &Event) -> Option<EventResult> + Send + Sync>>;
+
+impl<E: Element> Element for OnEvent<E> {
+    fn render(&self, renderer: &mut u8) {
+        self.element.render(renderer);
+    }
+
+    fn event(&mut self, event: Event) -> EventResult {
+        let element = &mut self.element;
+        let callbacks = &self.callbacks;
+
+        callbacks.iter()
+            .filter(|&(ev, _)| ev == &event)
+            .filter_map(|(_, cb)| (*cb)(element, &event))
+            .fold(None, |s, r| match s {
+                None => Some(r),
+                Some(c) => Some(c.and(r)),
+            })
+            .unwrap_or_else(|| {
+                EventResult::Ignored
+            })
+    }
+}
 
 
 
@@ -106,7 +156,7 @@ impl Element for Editor {
         }
     }
 
-    fn event(&mut self, event: Event) -> Option<Callback> {
+    fn event(&mut self, event: Event) -> EventResult {
         self.doc.event(event)
     }
 }
@@ -123,10 +173,10 @@ impl Element for Document {
         *renderer = renderer.wrapping_add(2);
     }
 
-    fn event(&mut self, event: Event) -> Option<Callback> {
-        Some(match event {
+    fn event(&mut self, event: Event) -> EventResult {
+        EventResult::Consumed(Some(match event {
             Event::Click => self.on_click.clone(),
             Event::Key => self.on_key.clone(),
-        })
+        }))
     }
 }
