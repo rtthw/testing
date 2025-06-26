@@ -6,7 +6,31 @@ use std::{marker::PhantomData, ptr::NonNull};
 
 
 fn main() {
-    run()
+    let a = Box::new(A);
+    let b = Box::new(B);
+    let c = Box::new(C);
+    let d = Box::new(D);
+    let e = Box::new(E);
+
+    let mut tree = Node::Branch(a, vec![
+        Node::Branch(b, vec![
+            Node::Leaf(d),
+            Node::Leaf(e),
+        ]),
+        Node::Leaf(c),
+    ]);
+
+    let mut pass = RenderPass {
+        shapes: Vec::new(),
+    };
+
+    println!("Pass (before): {:?}", pass.shapes);
+
+    tree.crawl(&mut |object| {
+        object.as_renderable().map(|obj| obj.render(&mut pass));
+    });
+
+    println!("Pass (after): {:?}", pass.shapes);
 }
 
 
@@ -47,6 +71,27 @@ impl<'a> Renderable<'a> {
     }
 }
 
+enum Node {
+    Branch(Box<dyn Object>, Vec<Node>),
+    Leaf(Box<dyn Object>),
+}
+
+impl Node {
+    fn crawl(&mut self, func: &mut impl FnMut(&mut Box<dyn Object>)) {
+        match self {
+            Node::Branch(object, children) => {
+                func(object);
+                for child in children {
+                    child.crawl(func);
+                }
+            }
+            Node::Leaf(object) => {
+                func(object);
+            }
+        }
+    }
+}
+
 
 
 // --- Implementation
@@ -54,30 +99,43 @@ impl<'a> Renderable<'a> {
 
 
 struct A;
-
-impl Render for A {
-    fn render(&self, pass: &mut RenderPass) {
-        pass.shapes.push(4);
-    }
-}
-
 impl Object for A {
     fn as_renderable<'a>(&'a self) -> Option<Renderable<'a>> {
         Some(Renderable::new(self))
     }
 }
-
-
-
-fn run() {
-    let a = A;
-
-    let mut pass = RenderPass {
-        shapes: Vec::new(),
-    };
-    println!("Pass (before): {:?}", pass.shapes);
-    if let Some(renderable) = a.as_renderable() {
-        renderable.render(&mut pass);
+impl Render for A {
+    fn render(&self, pass: &mut RenderPass) {
+        pass.shapes.push(1);
     }
-    println!("Pass (after): {:?}", pass.shapes);
+}
+
+struct B;
+impl Object for B {}
+
+struct C;
+impl Object for C {
+    fn as_renderable<'a>(&'a self) -> Option<Renderable<'a>> {
+        Some(Renderable::new(self))
+    }
+}
+impl Render for C {
+    fn render(&self, pass: &mut RenderPass) {
+        pass.shapes.push(3);
+    }
+}
+
+struct D;
+impl Object for D {}
+
+struct E;
+impl Object for E {
+    fn as_renderable<'a>(&'a self) -> Option<Renderable<'a>> {
+        Some(Renderable::new(self))
+    }
+}
+impl Render for E {
+    fn render(&self, pass: &mut RenderPass) {
+        pass.shapes.push(5);
+    }
 }
