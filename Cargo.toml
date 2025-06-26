@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+[dev-dependencies]
 hecs = "0.10"
 
 [[example]]
@@ -17,3 +19,6 @@ name = "object_tree_2"
 
 [[example]]
 name = "object_tree_3"
+
+[[example]]
+name = "object_tree_4"
