@@ -2,6 +2,7 @@
 
 
 use bog::prelude::*;
+use slotmap::{Key as _, SlotMap};
 
 
 
@@ -10,23 +11,27 @@ fn main() {
 
 
 
-pub struct UserInterface<I = &'static str>
-where
-    I: Copy,
-{
-    root: Element<I>,
+slotmap::new_key_type! { struct Node; }
+
+pub struct UserInterface {
+    root: Node,
+    elements: SlotMap<Node, ElementNode>,
     mouse_pos: Vec2,
 }
 
-impl<I: Copy> UserInterface<I> {
-    pub fn new(root: Element<I>) -> Self {
+impl UserInterface {
+    pub fn new(root: ElementNode) -> Self {
+        let mut elements = SlotMap::with_capacity_and_key(16);
+        let root = elements.insert(root);
+
         Self {
             root,
+            elements,
             mouse_pos: Vec2::ZERO,
         }
     }
 
-    pub fn handle_event(&mut self, event: InputEvent) -> Vec<Input<I>> {
+    pub fn handle_event(&mut self, event: InputEvent) -> Vec<Input> {
         match event {
             InputEvent::Resize { width, height } => {
                 self.handle_resize(Rect::new(Vec2::ZERO, vec2(width as _, height as _)))
@@ -38,7 +43,7 @@ impl<I: Copy> UserInterface<I> {
         }
     }
 
-    pub fn handle_mouse_move(&mut self, pos: Vec2) -> Vec<Input<I>> {
+    pub fn handle_mouse_move(&mut self, pos: Vec2) -> Vec<Input> {
         if self.mouse_pos == pos {
             return Vec::new();
         }
@@ -48,40 +53,32 @@ impl<I: Copy> UserInterface<I> {
         vec![Input::MouseMovement { delta }]
     }
 
-    pub fn handle_resize(&mut self, area: Rect) -> Vec<Input<I>> {
-        self.root.do_layout(area);
+    pub fn handle_resize(&mut self, area: Rect) -> Vec<Input> {
+        self.elements[self.root].do_layout(area);
         Vec::new()
     }
 }
 
-pub enum Input<I = &'static str>
-where
-    I: Copy,
-{
+pub enum Input {
     MouseMovement {
         /// The change in mouse position since the last `MouseMovement` input.
         delta: Vec2,
     },
     MouseEnter {
-        element: I,
+        element: u64,
     },
 }
 
-pub struct Element<I = &'static str>
-where
-    I: Copy,
-{
-    id: I,
+pub struct ElementNode {
     area: Rect,
     layout_size: Vec2,
     visual_size: Vec2,
-    children: Vec<Element<I>>,
+    children: Vec<ElementNode>,
 }
 
-impl<I: Copy> Element<I> {
-    pub fn new(id: I) -> Self {
+impl ElementNode {
+    pub fn new() -> Self {
         Self {
-            id,
             area: Rect::NONE,
             layout_size: Vec2::ZERO,
             visual_size: Vec2::ZERO,
@@ -89,7 +86,7 @@ impl<I: Copy> Element<I> {
         }
     }
 
-    pub fn with_children(mut self, children: impl Into<Vec<Element<I>>>) -> Self {
+    pub fn with_children(mut self, children: impl Into<Vec<ElementNode>>) -> Self {
         self.children = children.into();
         self
     }
@@ -107,4 +104,10 @@ impl<I: Copy> Element<I> {
 pub struct Layout {
     pub bounds: Rect,
     pub children: Vec<Layout>,
+}
+
+
+
+trait Element {
+    fn layout(&self, bounds: Rect, renderer: &mut Renderer) -> Layout;
 }
