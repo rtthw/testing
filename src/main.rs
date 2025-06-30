@@ -11,9 +11,10 @@ fn main() {
 
 
 
-slotmap::new_key_type! { struct Id; }
+slotmap::new_key_type! { pub struct Id; }
 
 
+// TODO: Maybe create a non-allocating tree? Would be faster but less flexible.
 pub struct Tree {
     root: Id,
     nodes: SlotMap<Id, NodeInfo>,
@@ -77,6 +78,68 @@ impl Tree {
             children,
             parents,
         }
+    }
+
+    pub fn handle_resize(&mut self, area: Rect) -> Vec<Event> {
+        // FIXME: Maybe don't early return here? (Only saves one allocation?)
+        if self.nodes[self.root].area == area {
+            return vec![];
+        }
+
+        fn inner(
+            tree: &mut Tree,
+            node: Id,
+            area: Rect,
+            events: &mut Vec<Event>,
+        ) {
+            if tree.nodes[node].area == area {
+                return;
+            }
+            tree.nodes[node].area = area;
+
+            events.push(Event::Resize { element: node });
+
+            let axis = tree.nodes[node].style.axis;
+            let length = match axis {
+                Axis::Horizontal => area.w,
+                Axis::Vertical => area.h,
+            };
+            let sizings = tree.children[node].iter()
+                .map(|n| tree.nodes[*n].style.sizing.clone())
+                .collect::<Vec<_>>();
+            let sizes = resolve_sizes(length, sizings);
+
+            let mut length_acc = 0.0;
+            for (child_id, child_length) in tree.children[node].clone().into_iter()
+                .zip(sizes.into_iter())
+            {
+                let child_area = match axis {
+                    Axis::Horizontal => Rect::new(
+                        vec2(area.x + length_acc, area.y),
+                        vec2(child_length, area.h),
+                    ),
+                    Axis::Vertical => Rect::new(
+                        vec2(area.x, area.y + length_acc),
+                        vec2(area.w, child_length),
+                    ),
+                };
+                length_acc += child_length;
+
+                inner(tree, child_id, child_area, events);
+            }
+        }
+
+        let mut events = vec![];
+
+        inner(self, self.root, area, &mut events);
+
+        events
+    }
+}
+
+impl Tree {
+    pub fn parent(&self, node: Id) -> Option<Id> {
+        self.parents[node]
     }
 }
 
@@ -257,7 +320,7 @@ fn works() {
     let root_area = Rect::new(Vec2::ZERO, vec2(100.0, 50.0));
     let (left_area, right_area) = root_area.split_portion_h(0.2);
 
-    let tree = Tree::new(
+    let mut tree = Tree::new(
         Node::new()
             .with_style(Style::default().horizontal())
             .with_children(vec![
@@ -269,6 +332,7 @@ fn works() {
         root_area,
     );
 
+
     let root_children = tree.children[tree.root].clone();
     assert!(root_children.len() == 2);
 
@@ -277,4 +341,37 @@ fn works() {
 
     assert_eq!(tree.nodes[left].area, left_area);
     assert_eq!(tree.nodes[right].area, right_area);
+
+
+    let new_root_area = Rect::new(Vec2::ZERO, vec2(200.0, 10.0));
+    let (new_left_area, new_right_area) = new_root_area.split_portion_h(0.2);
+
+    let events = tree.handle_resize(new_root_area);
+
+    assert_eq!(events, vec![
+        Event::Resize { element: tree.root },
+        Event::Resize { element: left },
+        Event::Resize { element: right },
+    ]);
+
+    let root_children = tree.children[tree.root].clone();
+    assert!(root_children.len() == 2);
+
+    assert_eq!(left, root_children[0]);
+    assert_eq!(right, root_children[1]);
+
+    assert_ne!(tree.nodes[left].area, left_area);
+    assert_ne!(tree.nodes[right].area, right_area);
+
+    assert_eq!(tree.nodes[left].area, new_left_area);
+    assert_eq!(tree.nodes[right].area, new_right_area);
+}
+
+
+
+#[derive(Debug, PartialEq)]
+pub enum Event {
+    Resize {
+        element: Id,
+    },
 }
