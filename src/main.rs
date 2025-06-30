@@ -64,7 +64,10 @@ impl UserInterface {
     }
 
     pub fn handle_resize(&mut self, area: Rect) -> Vec<Input> {
-        Vec::new()
+        let mut inputs = vec![];
+        self.root.compute_layout(area, &mut inputs);
+
+        inputs
     }
 }
 
@@ -77,6 +80,9 @@ pub enum Input {
         element: &'static str,
     },
     MouseLeave {
+        element: &'static str,
+    },
+    Resized {
         element: &'static str,
     },
 }
@@ -139,12 +145,34 @@ impl Node {
 
         list
     }
+
+    fn compute_layout(&mut self, area: Rect, inputs: &mut Vec<Input>) {
+        if area == self.area {
+            return;
+        }
+        self.area = area;
+        inputs.push(Input::Resized { element: self.name });
+
+        if !self.children.is_empty() {
+            let rects = match self.style.orientation {
+                Orientation::Horizontal => area.columns(self.children.len()),
+                Orientation::Vertical => area.rows(self.children.len()),
+            };
+
+            assert_eq!(rects.len(), self.children.len());
+
+            for (child, rect) in self.children.iter_mut().zip(rects.into_iter()) {
+                child.compute_layout(rect, inputs);
+            }
+        }
+    }
 }
 
 pub struct Style {
     pub size_request: Option<Vec2>,
     pub visual_size: Vec2,
     pub hoverable: bool,
+    pub orientation: Orientation,
 }
 
 impl Default for Style {
@@ -153,6 +181,53 @@ impl Default for Style {
             size_request: None,
             visual_size: Vec2::ZERO,
             hoverable: true,
+            orientation: Orientation::Vertical,
         }
     }
+}
+
+impl Style {
+    pub fn horizontal(mut self) -> Self {
+        self.orientation = Orientation::Horizontal;
+        self
+    }
+
+    pub fn vertical(mut self) -> Self {
+        self.orientation = Orientation::Vertical;
+        self
+    }
+}
+
+pub enum Orientation {
+    Horizontal,
+    Vertical,
+}
+
+
+
+#[cfg(test)]
+#[test]
+fn works() {
+    let root = Node::new("root")
+        .with_style(Style::default().horizontal())
+        .with_children(vec![
+            Node::new("left"),
+            Node::new("right"),
+        ]);
+
+    let root_area = Rect::new(Vec2::ZERO, vec2(10.0, 2.0));
+    let (left_area, right_area) = root_area.split_len_h(5.0);
+
+    let mut ui = UserInterface::new(root);
+    ui.handle_resize(root_area);
+
+    assert_eq!(
+        ui.root.children.iter()
+            .map(|n| (n.name, n.area))
+            .collect::<Vec<_>>(),
+        vec![
+            ("left", left_area),
+            ("right", right_area),
+        ],
+    );
 }
