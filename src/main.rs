@@ -219,7 +219,7 @@ fn works() {
     let (left_area, right_area) = root_area.split_len_h(5.0);
 
     let mut ui = UserInterface::new(root);
-    ui.handle_resize(root_area);
+    let inputs = ui.handle_resize(root_area);
 
     assert_eq!(
         ui.root.children.iter()
@@ -228,6 +228,20 @@ fn works() {
         vec![
             ("left", left_area),
             ("right", right_area),
+        ],
+    );
+    assert_eq!(
+        inputs
+            .into_iter()
+            .map(|i| {
+                let Input::Resized { element } = i else { panic!("impossible") };
+                element
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            "root",
+            "left",
+            "right",
         ],
     );
 }
