@@ -45,7 +45,7 @@ impl UserInterface {
         let delta = pos - self.mouse_pos;
         let mut inputs = vec![Input::MouseMovement { delta }];
 
-        let new_hovered = self.root.list_under(pos);
+        let new_hovered = self.root.list_under(pos, &|node| node.style.hoverable);
         if self.hovered != new_hovered {
             for element in &self.hovered {
                 if !new_hovered.contains(element) {
@@ -108,30 +108,51 @@ impl Node {
         self
     }
 
-    fn list_under(&self, point: Vec2) -> Vec<&'static str> {
+    fn list_under(&self, point: Vec2, check_fn: &impl Fn(&Node) -> bool) -> Vec<&'static str> {
         if !self.area.contains(point) {
             return vec![];
         }
 
-        fn inner(current: &Node, list: &mut Vec<&'static str>, point: Vec2) {
+        fn inner(
+            current: &Node,
+            list: &mut Vec<&'static str>,
+            point: Vec2,
+            check_fn: &impl Fn(&Node) -> bool,
+        ) {
             for child_area in current.children.iter() {
                 if !child_area.area.contains(point) {
                     continue;
                 }
-                list.push(child_area.name);
-                inner(child_area, list, point);
+                if check_fn(current) {
+                    list.push(child_area.name);
+                }
+                inner(child_area, list, point, check_fn);
             }
         }
 
-        let mut list = vec![self.name];
-        inner(self, &mut list, point);
+        let mut list = if check_fn(self) {
+            vec![self.name]
+        } else {
+            vec![]
+        };
+        inner(self, &mut list, point, check_fn);
 
         list
     }
 }
 
-#[derive(Default)]
 pub struct Style {
     pub size_request: Option<Vec2>,
     pub visual_size: Vec2,
+    pub hoverable: bool,
+}
+
+impl Default for Style {
+    fn default() -> Self {
+        Self {
+            size_request: None,
+            visual_size: Vec2::ZERO,
+            hoverable: true,
+        }
+    }
 }
