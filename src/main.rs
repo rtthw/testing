@@ -2,7 +2,6 @@
 
 
 use bog::prelude::*;
-use slotmap::{Key as _, SlotMap};
 
 
 
@@ -11,23 +10,18 @@ fn main() {
 
 
 
-slotmap::new_key_type! { struct Node; }
-
 pub struct UserInterface {
     root: Node,
-    elements: SlotMap<Node, ElementNode>,
     mouse_pos: Vec2,
+    hovered: Vec<&'static str>,
 }
 
 impl UserInterface {
-    pub fn new(root: ElementNode) -> Self {
-        let mut elements = SlotMap::with_capacity_and_key(16);
-        let root = elements.insert(root);
-
+    pub fn new(root: Node) -> Self {
         Self {
             root,
-            elements,
             mouse_pos: Vec2::ZERO,
+            hovered: Vec::new(),
         }
     }
 
@@ -49,12 +43,27 @@ impl UserInterface {
         }
 
         let delta = pos - self.mouse_pos;
+        let mut inputs = vec![Input::MouseMovement { delta }];
 
-        vec![Input::MouseMovement { delta }]
+        let new_hovered = self.root.list_under(pos);
+        if self.hovered != new_hovered {
+            for element in &self.hovered {
+                if !new_hovered.contains(element) {
+                    inputs.push(Input::MouseLeave { element });
+                }
+            }
+            for element in &new_hovered {
+                if !self.hovered.contains(element) {
+                    inputs.push(Input::MouseEnter { element });
+                }
+            }
+            self.hovered = new_hovered;
+        }
+
+        inputs
     }
 
     pub fn handle_resize(&mut self, area: Rect) -> Vec<Input> {
-        self.elements[self.root].do_layout(area);
         Vec::new()
     }
 }
@@ -65,49 +74,64 @@ pub enum Input {
         delta: Vec2,
     },
     MouseEnter {
-        element: u64,
+        element: &'static str,
+    },
+    MouseLeave {
+        element: &'static str,
     },
 }
 
-pub struct ElementNode {
+pub struct Node {
+    name: &'static str,
     area: Rect,
-    layout_size: Vec2,
-    visual_size: Vec2,
-    children: Vec<ElementNode>,
+    style: Style,
+    children: Vec<Node>,
 }
 
-impl ElementNode {
-    pub fn new() -> Self {
+impl Node {
+    pub fn new(name: &'static str) -> Self {
         Self {
+            name,
             area: Rect::NONE,
-            layout_size: Vec2::ZERO,
-            visual_size: Vec2::ZERO,
+            style: Style::default(),
             children: Vec::new(),
         }
     }
 
-    pub fn with_children(mut self, children: impl Into<Vec<ElementNode>>) -> Self {
+    pub fn with_children(mut self, children: impl Into<Vec<Node>>) -> Self {
         self.children = children.into();
         self
     }
 
-    fn do_layout(&mut self, bounds: Rect) -> Layout {
-        self.area = bounds;
+    pub fn with_style(mut self, style: impl Into<Style>) -> Self {
+        self.style = style.into();
+        self
+    }
 
-        Layout {
-            bounds,
-            children: self.children.iter_mut().map(|e| e.do_layout(bounds)).collect(),
+    fn list_under(&self, point: Vec2) -> Vec<&'static str> {
+        if !self.area.contains(point) {
+            return vec![];
         }
+
+        fn inner(current: &Node, list: &mut Vec<&'static str>, point: Vec2) {
+            for child_area in current.children.iter() {
+                if !child_area.area.contains(point) {
+                    continue;
+                }
+                list.push(child_area.name);
+                inner(child_area, list, point);
+            }
+        }
+
+        let mut list = vec![self.name];
+        inner(self, &mut list, point);
+
+        list
     }
 }
 
-pub struct Layout {
-    pub bounds: Rect,
-    pub children: Vec<Layout>,
-}
-
-
-
-trait Element {
-    fn layout(&self, bounds: Rect, renderer: &mut Renderer) -> Layout;
+#[derive(Default)]
+pub struct Style {
+    pub size_request: Option<Vec2>,
+    pub visual_size: Vec2,
 }

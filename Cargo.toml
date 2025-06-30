@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 bog = { path = "../bog" }
-slotmap = "1"
 
 [dev-dependencies]
 hecs = "0.10"

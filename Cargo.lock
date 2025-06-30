@@ -1835,7 +1835,6 @@ version = "0.1.0"
 dependencies = [
  "bog",
  "hecs",
- "slotmap",
 ]
 
 [[package]]
