@@ -7,7 +7,11 @@ edition = "2024"
 bog = { path = "../bog" }
 
 [dev-dependencies]
+bog = { path = "../bog" }
 hecs = "0.10"
+
+[[example]]
+name = "bog_ui_1"
 
 [[example]]
 name = "function_dropper_1"
