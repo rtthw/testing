@@ -7,15 +7,6 @@ use slotmap::{SecondaryMap, SlotMap};
 
 
 fn main() {
-    let mut tree = Tree::new(
-        Node::new()
-            .with_style(Style::default().horizontal())
-            .with_children(vec![
-                Node::new(),
-                Node::new(),
-            ]),
-        Rect::new(Vec2::ZERO, vec2(100.0, 50.0)),
-    );
 }
 
 
@@ -38,31 +29,47 @@ impl Tree {
 
         fn digest(
             node: Node,
-            parent: Id,
+            area: Rect,
+            parent: Option<Id>,
             nodes: &mut SlotMap<Id, NodeInfo>,
             children: &mut SecondaryMap<Id, Vec<Id>>,
             parents: &mut SecondaryMap<Id, Option<Id>>,
-        ) {
+        ) -> Id {
+            let axis = node.style.axis;
             let id = nodes.insert(NodeInfo {
-                area: Rect::NONE, // TODO
+                area,
                 style: node.style,
             });
-            let _ = parents.insert(id, Some(parent));
-            let _ = children.insert(id, Vec::with_capacity(0));
+            let _ = parents.insert(id, parent);
 
-            for child in node.children {
-                digest(child, id, nodes, children, parents);
+            let length = match axis {
+                Axis::Horizontal => area.w,
+                Axis::Vertical => area.h,
+            };
+            let sizings = node.children.iter().map(|n| n.style.sizing.clone()).collect::<Vec<_>>();
+            let sizes = resolve_sizes(length, sizings);
+
+            let mut length_acc = 0.0;
+            let mut node_children = Vec::with_capacity(node.children.len());
+            for (child, child_length) in node.children.into_iter().zip(sizes.into_iter()) {
+                let child_area = match axis {
+                    Axis::Horizontal =>
+                        Rect::new(vec2(length_acc, 0.0), vec2(child_length, area.h)),
+                    Axis::Vertical =>
+                        Rect::new(vec2(0.0, length_acc), vec2(area.w, child_length)),
+                };
+                length_acc += child_length;
+
+                let child_id = digest(child, child_area, Some(id), nodes, children, parents);
+                node_children.push(child_id);
             }
+
+            let _ = children.insert(id, node_children);
+
+            id
         }
 
-        let root_id = nodes.insert(NodeInfo {
-            style: root.style,
-            area,
-        });
-        parents.insert(root_id, None);
-        for root_child in root.children {
-            digest(root_child, root_id, &mut nodes, &mut children, &mut parents);
-        }
+        let root_id = digest(root, area, None, &mut nodes, &mut children, &mut parents);
 
         Self {
             root: root_id,
@@ -208,6 +215,7 @@ fn resolve_sizes(length: f32, sizings: Vec<Sizing>) -> Vec<f32> {
 }
 
 
+#[derive(Clone, Copy)]
 pub enum Axis {
     Horizontal,
     Vertical,
@@ -241,4 +249,32 @@ fn sizing_resolver_works() {
         round_sizes(12.0, &[Sizing::Portion(0.4), Sizing::Portion(0.3), Sizing::Portion(0.2)]),
         vec![4.8, 3.6, 2.4],
     );
+}
+
+#[cfg(test)]
+#[test]
+fn works() {
+    let root_area = Rect::new(Vec2::ZERO, vec2(100.0, 50.0));
+    let (left_area, right_area) = root_area.split_portion_h(0.2);
+
+    let tree = Tree::new(
+        Node::new()
+            .with_style(Style::default().horizontal())
+            .with_children(vec![
+                Node::new()
+                    .with_style(Style::default().portion_sized(0.2)),
+                Node::new()
+                    .with_style(Style::default().auto_sized()),
+            ]),
+        root_area,
+    );
+
+    let root_children = tree.children[tree.root].clone();
+    assert!(root_children.len() == 2);
+
+    let left = root_children[0];
+    let right = root_children[1];
+
+    assert_eq!(tree.nodes[left].area, left_area);
+    assert_eq!(tree.nodes[right].area, right_area);
 }
