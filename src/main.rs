@@ -7,17 +7,19 @@ use std::any::{Any, TypeId};
 
 fn main() {
     let o = MyObject;
-    assert!(o.is_dyn::<dyn Render>());
+    assert!(<dyn Object>::is_dyn::<dyn Render>(&o));
 }
 
 
 
 trait Object {
+    fn is_dyn_by_id(&self, id: TypeId) -> bool;
+}
+
+impl dyn Object {
     fn is_dyn<T: Any + ?Sized>(&self) -> bool {
         self.is_dyn_by_id(TypeId::of::<T>())
     }
-
-    fn is_dyn_by_id(&self, id: TypeId) -> bool;
 }
 
 macro_rules! impl_object {
@@ -42,7 +44,7 @@ macro_rules! impl_object {
 
 
 
-trait Render {
+pub trait Render {
     fn render(&self);
 }
 
