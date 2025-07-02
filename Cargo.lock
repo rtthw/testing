@@ -167,10 +167,12 @@ dependencies = [
 name = "bog"
 version = "0.1.0"
 dependencies = [
+ "bitflags 2.9.1",
  "bog-core",
  "bog-render",
  "bog-window",
  "pollster",
+ "slotmap",
  "thiserror 2.0.12",
 ]
 
