@@ -1,48 +1,56 @@
 
 
 
-use bog::prelude::NoHashMap;
-use slotmap::SlotMap;
+use hecs::{Component as Member, ComponentError as MemberError, ComponentRef as MemberRef, Entity, World};
 
 
 
 fn main() {
     let mut data = Data::new();
-    let root = data.spawn();
 
-    root.request_render(&mut data.needs_render);
+    let root = Object::spawn(&mut data);
+    root.insert(&mut data, Something).unwrap();
+
+    let _root_something = root.get::<&Something>(&data).unwrap();
+    println!("SUCCESS");
 }
 
 
-
-slotmap::new_key_type! { pub struct Id; }
-
-impl Into<u64> for Id {
-    fn into(self) -> u64 {
-        self.0.as_ffi()
-    }
-}
-
-impl Id {
-    pub fn request_render(&self, needs_render: &mut NoHashMap<Id, bool>) {
-        needs_render.get_mut(self).map(|flag| *flag = true);
-    }
-}
 
 pub struct Data {
-    pub objects: SlotMap<Id, ()>,
-    pub needs_render: NoHashMap<Id, bool>,
+    pub world: World,
 }
 
 impl Data {
     pub fn new() -> Self {
         Self {
-            objects: SlotMap::with_capacity_and_key(16),
-            needs_render: NoHashMap::with_capacity(16),
+            world: World::new(),
         }
     }
+}
 
-    pub fn spawn(&mut self) -> Id {
-        self.objects.insert(())
+
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Object(Entity);
+
+impl Object {
+    pub fn spawn(data: &mut Data) -> Self {
+        Self(data.world.spawn(()))
+    }
+
+    pub fn get<'a, T: MemberRef<'a>>(&self, data: &'a Data) -> Result<T::Ref, MemberError> {
+        Ok(data.world
+            .entity(self.0)?
+            .get::<T>()
+            .ok_or_else(hecs::MissingComponent::new::<T::Component>)?)
+    }
+
+    pub fn insert(&self, data: &mut Data, member: impl Member) -> Result<(), hecs::NoSuchEntity> {
+        data.world.insert_one(self.0, member)
     }
 }
+
+
+
+pub struct Something;
