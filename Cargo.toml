@@ -13,6 +13,9 @@ hecs = "0.10"
 slotmap = "1"
 
 [[example]]
+name = "behavior_registry_1"
+
+[[example]]
 name = "bog_ui_1"
 
 [[example]]
