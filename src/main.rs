@@ -8,53 +8,86 @@ use hecs::{Entity, World};
 fn main() {
     let mut data = Data {
         world: World::new(),
-        items: Vec::new(),
+        effects: Vec::new(),
     };
 
-    data.equip_item::<SteelHelmet>();
+    let _steel_helmet = data.activate_effect::<SteelHelmet>();
+    assert!(get_player_armor(&data.world) == 2.0);
+    let steel_banner = data.activate_effect::<SteelBanner>();
+    assert!(get_player_armor(&data.world) == 4.0);
+    data.deactivate_effect(steel_banner);
+    assert!(get_player_armor(&data.world) == 2.0);
+    println!("WORKS");
 }
 
 
 
 pub struct Data {
     pub world: World,
-    pub items: Vec<Item>,
+    pub effects: Vec<Effect>,
 }
 
 impl Data {
-    pub fn equip_item<T: ToItem>(&mut self) {
-        let item = T::to_item();
-        let _entity = (item.create)(&mut self.world);
-        // (item.on_equip)(self);
-        let index = self.items.len();
-        self.items.push(item);
-        (self.items[index].on_equip)(self);
+    // FIXME: Don't use indexing here, because it can (obviously) break.
+    pub fn activate_effect<T: ToEffect>(&mut self) -> ActiveEffect {
+        let effect = T::to_effect();
+        let entity = (effect.activate)(&mut self.world);
+        let index = self.effects.len();
+        self.effects.push(effect);
+        // (self.effects[index].on_equip)(self);
+
+        ActiveEffect {
+            effect,
+            index,
+            entity,
+        }
+    }
+
+    // FIXME: Don't use indexing here, because it can (obviously) break.
+    pub fn deactivate_effect(&mut self, effect: ActiveEffect) {
+        let _ = self.effects.remove(effect.index);
+        (effect.effect.deactivate)(&mut self.world, effect.entity);
     }
 }
 
 
 
+fn get_player_armor(world: &World) -> f32 {
+    world.query::<&Armor>()
+        .into_iter()
+        .fold(0.0, |total, armor| total + armor.1.0)
+}
+
+
+
 #[derive(Clone, Copy)]
-pub struct Item {
-    pub create: fn(&mut World) -> Entity,
-    pub on_equip: fn(&mut Data),
+pub struct ActiveEffect {
+    pub effect: Effect,
+    pub index: usize,
+    pub entity: Entity,
+}
+
+#[derive(Clone, Copy)]
+pub struct Effect {
+    pub activate: fn(&mut World) -> Entity,
+    pub deactivate: fn(&mut World, Entity),
 }
 
 #[allow(unused)]
-pub unsafe trait ToItem {
-    fn to_item() -> Item;
+pub unsafe trait ToEffect {
+    fn to_effect() -> Effect;
 }
 
-macro_rules! item {
-    ($name:ident; create, on_equip,) => {
+macro_rules! effect {
+    ($name:ident; activate,) => {
         #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
         pub struct $name;
 
-        unsafe impl ToItem for $name {
-            fn to_item() -> Item {
-                Item {
-                    create: |world| $name.create(world),
-                    on_equip: |data| $name.on_equip(data),
+        unsafe impl ToEffect for $name {
+            fn to_effect() -> Effect {
+                Effect {
+                    activate: |world| $name.activate(world),
+                    deactivate: |world, entity| $name.deactivate(world, entity),
                 }
             }
         }
@@ -64,25 +97,51 @@ macro_rules! item {
 
 
 struct Equippable;
-struct Armor;
+struct Armor(f32);
 struct Steel;
 struct HeadSlot;
+struct OffhandSlot;
 
 
 
-item! {
-    SteelHelmet; create, on_equip,
+effect! {
+    SteelHelmet; activate,
 }
 
 impl SteelHelmet {
-    fn create(&self, world: &mut World) -> Entity {
-        println!("Creating steel helmet...");
+    fn activate(&self, world: &mut World) -> Entity {
+        println!("Activating steel helmet...");
         world.spawn((
-            SteelHelmet, Armor, Equippable, Steel, HeadSlot,
+            Armor(2.0), Equippable, Steel, HeadSlot,
         ))
     }
 
-    fn on_equip(&self, _data: &mut Data) {
-        println!("Equipping steel helmet...");
+    fn deactivate(&self, world: &mut World, entity: Entity) {
+        println!("Deactivating steel helmet...");
+        world.despawn(entity).unwrap();
+    }
+}
+
+effect! {
+    SteelBanner; activate,
+}
+
+impl SteelBanner {
+    fn activate(&self, world: &mut World) -> Entity {
+        println!("Activating steel banner...");
+        for (_id, (armor, _steel)) in world.query_mut::<(&mut Armor, &Steel)>() {
+            armor.0 *= 2.0;
+        }
+        world.spawn((
+            Equippable, Steel, OffhandSlot,
+        ))
+    }
+
+    fn deactivate(&self, world: &mut World, entity: Entity) {
+        println!("Deactivating steel banner...");
+        for (_id, (armor, _steel)) in world.query_mut::<(&mut Armor, &Steel)>() {
+            armor.0 /= 2.0;
+        }
+        world.despawn(entity).unwrap();
     }
 }
