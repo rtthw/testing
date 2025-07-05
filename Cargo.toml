@@ -16,6 +16,9 @@ slotmap = "1"
 name = "behavior_registry_1"
 
 [[example]]
+name = "behavior_registry_2"
+
+[[example]]
 name = "bog_ui_1"
 
 [[example]]
