@@ -11,19 +11,19 @@ fn main() {
         effects: Vec::new(),
     };
 
-    let steel_helmet = data.activate_effect::<SteelHelmet>();
+    data.activate_effect::<SteelHelmet>();
     assert!(get_player_armor(&data.world) == 2.0);
 
-    let steel_banner = data.activate_effect::<SteelBanner>();
+    data.activate_effect::<SteelBanner>();
     assert!(get_player_armor(&data.world) == 4.0);
 
-    data.deactivate_effect(steel_banner);
+    data.deactivate_effect::<SteelBanner>();
     assert!(get_player_armor(&data.world) == 2.0);
 
-    let _ = data.activate_effect::<SteelBanner>();
+    data.activate_effect::<SteelBanner>();
     assert!(get_player_armor(&data.world) == 4.0);
 
-    data.deactivate_effect(steel_helmet);
+    data.deactivate_effect::<SteelHelmet>();
     assert!(get_player_armor(&data.world) == 0.0);
 
     println!("WORKS");
@@ -33,29 +33,35 @@ fn main() {
 
 pub struct Data {
     pub world: World,
-    pub effects: Vec<Effect>,
+    pub effects: Vec<(Effect, Entity)>,
 }
 
 impl Data {
-    // FIXME: Don't use indexing here, because it can (obviously) break.
-    pub fn activate_effect<T: ToEffect>(&mut self) -> ActiveEffect {
+    pub fn activate_effect<T: ToEffect>(&mut self) {
         let effect = T::to_effect();
         let entity = (effect.activate)(self);
-        let index = self.effects.len();
-        self.effects.push(effect);
-        // (self.effects[index].on_equip)(self);
 
-        ActiveEffect {
-            effect,
-            index,
-            entity,
-        }
+        debug_assert!(!self.effects.contains(&(effect, entity)));
+
+        self.effects.push((effect, entity));
+
+        // (self.effects[index].on_equip)(self);
     }
 
-    // FIXME: Don't use indexing here, because it can (obviously) break.
-    pub fn deactivate_effect(&mut self, effect: ActiveEffect) {
-        let _ = self.effects.remove(effect.index);
-        (effect.effect.deactivate)(self, effect.entity);
+    pub fn deactivate_effect<T: ToEffect>(&mut self) {
+        let effect = T::to_effect();
+
+        let mut entity = None;
+        self.effects.retain(|(eff, ent)| if eff == &effect {
+            entity = Some(*ent);
+            false
+        } else {
+            true
+        });
+
+        debug_assert!(entity.is_some());
+
+        (effect.deactivate)(self, entity.unwrap());
     }
 }
 
@@ -69,14 +75,7 @@ fn get_player_armor(world: &World) -> f32 {
 
 
 
-#[derive(Clone, Copy)]
-pub struct ActiveEffect {
-    pub effect: Effect,
-    pub index: usize,
-    pub entity: Entity,
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Effect {
     pub activate: fn(&mut Data) -> Entity,
     pub deactivate: fn(&mut Data, Entity),
