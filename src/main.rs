@@ -1,70 +1,125 @@
 
 
 
-fn main() {}
+fn main() {
+    set_context(Context {});
+
+    let app = App::new();
+    let game = Game::new();
+
+    loop {
+    }
+}
 
 
 
+pub struct Context {}
+
+static mut CONTEXT: Option<Context> = None;
+
+#[allow(static_mut_refs)]
+fn get_context() -> &'static mut Context {
+    // TODO: Assertion for main thread.
+    unsafe { CONTEXT.as_mut().unwrap_or_else(|| panic!()) }
+}
+
+fn set_context(context: Context) {
+    unsafe { CONTEXT = Some(context) };
+}
+
+
+
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Object {
-    new: fn(&mut Registry),
+    // new: fn(&mut Context),
+}
+
+pub struct Instance<T: ToObject> {
+    _type: T,
+    object: Object,
+}
+
+impl<T: ToObject> Instance<T> {
+    pub fn new() -> Self {
+        Self {
+            _type: T::raw(),
+            object: T::to_object(),
+        }
+    }
 }
 
 #[allow(unused)]
 pub unsafe trait ToObject {
+    fn raw() -> Self;
     fn to_object() -> Object;
 }
 
+pub trait Instantiate: ToObject {
+    fn new() -> Instance<Self> where Self: Sized;
+}
+
+// TODO: TT muncher.
 macro_rules! object {
-    ($name:ident : $($type:path),*; register,) => {
-        object!($name; register,);
+    ($name:ident : $($super:path),* { $($member:path),* }) => {
+        object!($name);
         $(
-            unsafe impl Cast<$type> for $name {
-                fn cast() -> $type {
-                    $type
+            unsafe impl Cast<$super> for $name {
+                fn cast() -> $super {
+                    $super
                 }
             }
         )*
     };
-    ($name:ident; register,) => {
+    ($name:ident { $($member:path),* }) => {
+        object!($name);
+
+        $(
+            unsafe impl Get<$member> for $name {
+                fn get() -> $member {
+                    // TODO: Fill out context.
+                    let _context = get_context();
+                    $member
+                }
+            }
+        )*
+    };
+    ($name:ident) => {
         #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
         pub struct $name;
 
         unsafe impl ToObject for $name {
+            #[inline]
+            fn raw() -> Self {
+                Self
+            }
+
             fn to_object() -> Object {
                 Object {
-                    new: |reg| $name.new(reg),
+                    // new: |reg| $name.new(reg),
                 }
             }
         }
+
+        impl Instantiate for $name {
+            fn new() -> Instance<Self> {
+                Instance::new()
+            }
+        }
     };
-}
-
-pub struct Registry {
-
 }
 
 pub unsafe trait Cast<T> {
     fn cast() -> T;
 }
 
-
-
-object!(Thing; register,);
-
-impl Thing {
-    fn new(&self, registry: &mut Registry) {}
+pub unsafe trait Get<T> {
+    fn get() -> T;
 }
 
-object!(Something; register,);
 
-impl Something {
-    fn new(&self, registry: &mut Registry) {}
-}
 
-object!(Other: Thing, Something; register,);
-
-impl Other {
-    fn new(&self, registry: &mut Registry) {
-        <Self as Cast<Thing>>::cast().new(registry)
-    }
-}
+object!(App { Window });
+object!(Game {});
+object!(Window {});
+object!(Entity {});
+object!(Player: Entity {});
