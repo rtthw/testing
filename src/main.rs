@@ -5,6 +5,10 @@ fn main() {}
 
 
 
+pub unsafe trait Object {
+    fn raw() -> Self;
+}
+
 macro_rules! define {
     () => {};
 
@@ -18,16 +22,22 @@ macro_rules! define {
         $( #[$meta] )*
         $vis struct $name;
 
+        unsafe impl Object for $name {
+            fn raw() -> Self {
+                $name
+            }
+        }
+
         define!($($tail)*);
     };
 
-    // pub struct Something(...);
+    // pub struct Something(pub u8);
     (
         $( #[$meta:meta] )*
         $vis:vis struct $name:ident (
             $(
                 $( #[$member_meta:meta] )*
-                $member_vis:vis $member_ty:ident
+                $member_vis:vis $member_ty:ty
             ),*
         $(,)? );
 
@@ -37,17 +47,15 @@ macro_rules! define {
         $( #[$meta] )*
         $vis struct $name;
 
-        impl $name {
-            $(
-                $( #[$member_meta] )*
-                $member_vis fn $member_name(&self) -> $member_ty {
-                    todo!()
-                }
-            )*
+        unsafe impl Object for $name {
+            fn raw() -> Self {
+                $name
+            }
         }
 
         define!($($tail)*);
     };
+
 
     // pub struct Something { pub member_a: u8, };
     (
@@ -55,9 +63,10 @@ macro_rules! define {
         $vis:vis struct $name:ident {
             $(
                 $( #[$member_meta:meta] )*
-                $member_vis:vis $member_name:ident : $member_ty:ident
+                $member_vis:vis $member_name:ident : $member_ty:ty = $member_init:expr
             ),*
-        $(,)? };
+            $(,)?
+        };
         $($tail:tt)*
     ) => {
         #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -69,7 +78,7 @@ macro_rules! define {
                 $( #[$member_meta] )*
                 #[inline]
                 $member_vis fn $member_name(&self) -> $member_ty {
-                    $member_ty
+                    <$member_ty>::raw()
                 }
             )*
         }
@@ -78,9 +87,27 @@ macro_rules! define {
     };
 }
 
-define!{
-    pub struct Player;
-    pub struct Game {
-        pub player: Player,
-    };
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macro_works() {
+        define!{
+            pub struct Player(pub u8);
+            pub struct Game {
+                player: Player = Player::new(1),
+            };
+        }
+
+        impl Player {
+            pub fn something(&self) {
+                println!("tests::macro_works::something");
+            }
+        }
+
+        Game.player().something();
+    }
 }
