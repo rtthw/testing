@@ -22,6 +22,9 @@ name = "behavior_registry_2"
 name = "behavior_registry_3"
 
 [[example]]
+name = "behavior_registry_4"
+
+[[example]]
 name = "bog_ui_1"
 
 [[example]]
