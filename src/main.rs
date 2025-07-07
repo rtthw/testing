@@ -8,64 +8,79 @@ fn main() {}
 macro_rules! define {
     () => {};
 
-    // pub Something;
+    // pub struct Something;
     (
-        $( #[$meta:meta] )*     // #[derive(...)]
-        $vis:vis $name:ident;   // pub Something;
-        $($tail:tt)*            // ...
+        $( #[$meta:meta] )*             // #[derive(...)]
+        $vis:vis struct $name:ident;    // pub struct Something;
+        $($tail:tt)*                    // ...
     ) => {
+        #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
         $( #[$meta] )*
         $vis struct $name;
+
         define!($($tail)*);
     };
 
-    // pub Something(...);
+    // pub struct Something(...);
     (
         $( #[$meta:meta] )*
-        $vis:vis $name:ident (
+        $vis:vis struct $name:ident (
             $(
-                $( #[$field_meta:meta] )*
-                $field_vis:vis $field_ty:ty
+                $( #[$member_meta:meta] )*
+                $member_vis:vis $member_ty:ident
             ),*
         $(,)? );
 
         $($tail:tt)*
     ) => {
+        #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
         $( #[$meta] )*
-        $vis struct $name (
+        $vis struct $name;
+
+        impl $name {
             $(
-                $( #[$field_meta] )*
-                $field_vis $field_ty
-            ),*
-        );
+                $( #[$member_meta] )*
+                $member_vis fn $member_name(&self) -> $member_ty {
+                    todo!()
+                }
+            )*
+        }
+
         define!($($tail)*);
     };
 
-    // pub Something { field_a: u8, }
+    // pub struct Something { pub member_a: u8, };
     (
         $( #[$meta:meta] )*
-        $vis:vis $name:ident {
+        $vis:vis struct $name:ident {
             $(
-                $( #[$field_meta:meta] )*
-                $field_vis:vis $field_name:ident : $field_ty:ty
+                $( #[$member_meta:meta] )*
+                $member_vis:vis $member_name:ident : $member_ty:ident
             ),*
         $(,)? };
         $($tail:tt)*
     ) => {
+        #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
         $( #[$meta] )*
-        $vis struct $name {
+        $vis struct $name;
+
+        impl $name {
             $(
-                $( #[$field_meta] )*
-                $field_vis $field_name : $field_ty
-            ),*
+                $( #[$member_meta] )*
+                #[inline]
+                $member_vis fn $member_name(&self) -> $member_ty {
+                    $member_ty
+                }
+            )*
         }
+
         define!($($tail)*);
     };
 }
 
 define!{
-    Player;
-    pub Game {
-        player: Player,
+    pub struct Player;
+    pub struct Game {
+        pub player: Player,
     };
 }
