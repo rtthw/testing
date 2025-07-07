@@ -1,7 +1,7 @@
 
 
 
-use std::{any::Any, marker::PhantomData, ptr::NonNull};
+use slotmap::{SecondaryMap, SlotMap};
 
 
 
@@ -9,70 +9,39 @@ fn main() {}
 
 
 
-pub trait Object {
-    fn init();
-    fn update();
-    fn render();
+slotmap::new_key_type! { pub struct Id; }
+
+pub struct Data {
+    map: SlotMap<Id, Box<dyn Object>>,
+
+    render: SecondaryMap<Id, Box<dyn Render>>,
 }
 
-pub struct Mut<T: 'static> {
-    _data: PhantomData<T>,
-    members: *mut Vec<Box<dyn Any>>,
-}
+impl Data {
+    pub fn insert<T: ObjectImpl>(&mut self) -> Id {
+        let object = T::new();
 
-
-
-pub struct Node {
-    members: Vec<Box<dyn Any>>,
-    init_fn: *const fn(),
-    update_fn: *const fn(),
-    render_fn: *const fn(),
-}
-
-impl Node {
-    fn new<T: Object + 'static>() -> Self {
-        Self {
-            members: Vec::new(),
-            init_fn: (&(T::init as fn()) as *const fn()).cast(),
-            update_fn: (&(T::update as fn()) as *const fn()).cast(),
-            render_fn: (&(T::render as fn()) as *const fn()).cast(),
-        }
+        self.map.insert(Box::new(object))
     }
 }
 
-
-
-pub trait Render {
-    fn render(&self);
-}
-
-// NOTE: Objects are always zero-sized, so that's why there's no need to store a lifetime here.
-pub struct RenderObject {
-    data: NonNull<()>,
-    render_fn: unsafe fn(NonNull<()>),
-}
-
-impl RenderObject {
-    pub fn new<T: Render>(object: &T) -> Self {
-        Self {
-            data: NonNull::from(object).cast(),
-            render_fn: |data| unsafe {
-                data.cast::<T>().as_ref().render();
-            }
-        }
-    }
-
-    pub fn render(&self) {
-        unsafe { (self.render_fn)(self.data) }
-    }
+pub struct DataSet<T> {
+    map: SecondaryMap<Id, Box<T>>,
 }
 
 
 
-pub struct App;
+#[derive(Clone, Copy)]
+pub struct Void;
 
-impl Render for App {
-    fn render(&self) {
-        println!("Rendering app...")
-    }
+
+
+pub trait Object: 'static {}
+
+pub unsafe trait ObjectImpl: Object {
+    fn new() -> Self;
+}
+
+pub unsafe trait Cast<T: ObjectImpl> {
+    fn cast() -> T;
 }
