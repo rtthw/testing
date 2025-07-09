@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 bog = { path = "../bog" }
+# hashbrown = "0.15"
 hecs = "0.10"
+rustc-hash = "2"
 slotmap = "1"
 
 [dev-dependencies]
