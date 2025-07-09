@@ -1,6 +1,10 @@
 
 
 
+use std::marker::PhantomData;
+
+
+
 fn main() {
     render_something::<Something>();
 }
@@ -21,15 +25,25 @@ fn takes_any_reference(thing: &dyn Render) {
     thing.render()
 }
 
-unsafe trait Zst: 'static {
+pub unsafe trait Zst: 'static {
     fn owned() -> Self;
     fn static_ref() -> &'static Self;
 }
+
+// unsafe trait Cast<T> {
+//     fn cast() -> T;
+// }
 
 macro_rules! define_zst {
     ($name:ident) => {
         #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
         pub struct $name;
+
+        impl From<()> for $name {
+            fn from(_value: ()) -> Self {
+                $name
+            }
+        }
 
         unsafe impl Zst for $name {
             fn owned() -> Self {
@@ -41,6 +55,49 @@ macro_rules! define_zst {
             }
         }
     };
+}
+
+// trait ZstMarker: 'static {}
+
+// impl<T: Zst> ZstMarker for T {}
+
+// fn test() {
+//     let dyn_zst = DynZst::<dyn Render>::new::<Something>();
+// }
+
+// pub struct DynZst<T: ?Sized> {
+//     zst: (),
+//     call: fn(()),
+//     _marker: PhantomData<T>,
+// }
+
+// impl<T: ?Sized> DynZst<T> {
+//     pub fn new<U: Zst + Cast<T>>() -> Self {
+//         Self {
+//             zst: (),
+//             call: |_| U::cast().,
+//             _marker: PhantomData,
+//         }
+//     }
+// }
+
+pub struct ZstRender {
+    // zst: &'static dyn ZstMarker,
+    zst: (),
+    op: fn(()),
+}
+
+impl ZstRender {
+    pub fn new<T: Zst + Render>() -> Self {
+        Self {
+            zst: (), // T::static_ref(),
+            op: |_elided_zst| { T::owned().render(); },
+        }
+    }
+
+    pub fn render(&self) {
+        (self.op)(self.zst)
+    }
 }
 
 
