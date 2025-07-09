@@ -1,47 +1,58 @@
 
 
 
-use slotmap::{SecondaryMap, SlotMap};
-
-
-
-fn main() {}
-
-
-
-slotmap::new_key_type! { pub struct Id; }
-
-pub struct Data {
-    map: SlotMap<Id, Box<dyn Object>>,
-
-    render: SecondaryMap<Id, Box<dyn Render>>,
+fn main() {
+    render_something::<Something>();
 }
 
-impl Data {
-    pub fn insert<T: ObjectImpl>(&mut self) -> Id {
-        let object = T::new();
 
-        self.map.insert(Box::new(object))
+
+fn render_something<T: Zst + Render>() {
+    takes_a_static_reference(Box::leak(Box::new(T::owned())));
+    takes_a_static_reference(T::static_ref());
+    takes_any_reference(T::static_ref());
+}
+
+fn takes_a_static_reference(thing: &'static dyn Render) {
+    thing.render()
+}
+
+fn takes_any_reference(thing: &dyn Render) {
+    thing.render()
+}
+
+unsafe trait Zst: 'static {
+    fn owned() -> Self;
+    fn static_ref() -> &'static Self;
+}
+
+macro_rules! define_zst {
+    ($name:ident) => {
+        #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+        pub struct $name;
+
+        unsafe impl Zst for $name {
+            fn owned() -> Self {
+                $name
+            }
+
+            fn static_ref() -> &'static Self {
+                &$name
+            }
+        }
+    };
+}
+
+
+
+pub trait Render {
+    fn render(&self) {}
+}
+
+define_zst!(Something);
+
+impl Render for Something {
+    fn render(&self) {
+        println!("One...");
     }
-}
-
-pub struct DataSet<T> {
-    map: SecondaryMap<Id, Box<T>>,
-}
-
-
-
-#[derive(Clone, Copy)]
-pub struct Void;
-
-
-
-pub trait Object: 'static {}
-
-pub unsafe trait ObjectImpl: Object {
-    fn new() -> Self;
-}
-
-pub unsafe trait Cast<T: ObjectImpl> {
-    fn cast() -> T;
 }
