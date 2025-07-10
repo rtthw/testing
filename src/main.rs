@@ -1,16 +1,83 @@
 
 
 
-use hecs::World;
+use std::any::Any;
 
 
 
 fn main() {
-    thread_assert::set_thread_id();
-    thread_assert::same_thread();
-    set_data(Data {
-        world: World::new(),
-    });
+    let mut registry = Registry::new();
+    let thing_class = registry.register_class::<Thing>();
+    let thing_1_id = registry.create_object(thing_class);
+    let thing_1_data_id = registry.objects[thing_class][thing_1_id]
+        .downcast_ref::<__Thing>().unwrap().id;
+
+    assert!(thing_1_id == thing_1_data_id)
+}
+
+
+
+// NOTE: Methods (not type) must be sized for dyn-compatibility.
+pub trait Class: 'static {
+    fn new(&self, id: usize) -> Box<dyn Any>;
+    fn raw() -> Self where Self: Sized;
+    fn static_ref(&self) -> &'static Self where Self: Sized;
+}
+
+pub struct Instance {
+    pub object: usize,
+    pub class: usize,
+}
+
+pub struct Registry {
+    classes: Vec<&'static dyn Class>,
+    objects: Vec<Vec<Box<dyn Any>>>,
+}
+
+impl Registry {
+    pub fn new() -> Self {
+        Self {
+            classes: Vec::new(),
+            objects: Vec::new(),
+        }
+    }
+
+    pub fn register_class<T: Class>(&mut self) -> usize {
+        let id = self.classes.len();
+        self.objects.push(Vec::new());
+        self.classes.push(T::raw().static_ref());
+        id
+    }
+
+    pub fn create_object(&mut self, class: usize) -> usize {
+        let id = self.objects[class].len();
+        self.objects[class].push(self.classes[class].new(id));
+        id
+    }
+}
+
+
+
+struct Thing;
+
+struct __Thing {
+    id: usize,
+}
+
+impl Class for Thing {
+    fn new(&self, id: usize) -> Box<dyn Any> {
+        Box::new(__Thing {
+            id,
+        })
+    }
+
+    fn raw() -> Self where Self: Sized {
+        Thing
+    }
+
+    fn static_ref(&self) -> &'static Self where Self: Sized {
+        &Thing
+    }
 }
 
 
@@ -20,7 +87,7 @@ fn main() {
 
 
 struct Data {
-    world: World,
+    registry: Registry,
     // instances: Instances,
 }
 
