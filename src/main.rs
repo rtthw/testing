@@ -1,9 +1,7 @@
 
 
 
-use std::marker::PhantomData;
-
-use hecs::{Entity, World};
+use hecs::World;
 
 
 
@@ -13,68 +11,6 @@ fn main() {
     set_data(Data {
         world: World::new(),
     });
-
-    let thing_a = Thing::new(); // &mut data().world
-    assert!(thing_a.class() == Thing);
-}
-
-
-
-pub trait Class: Sized + 'static {
-    fn new() -> Instance<Self>; // world: &mut World
-    fn class() -> Self;
-    fn class_ref() -> &'static Self;
-}
-
-
-
-#[derive(PartialEq)]
-pub struct Thing;
-
-pub struct __Thing<'a> {
-    pub field: &'a u8,
-}
-
-impl Class for Thing {
-    fn new() -> Instance<Self> { // world: &mut World
-        let id = data().world.spawn(());
-
-        Instance { id, _class: PhantomData }
-    }
-
-    fn class() -> Self { Thing }
-
-    fn class_ref() -> &'static Self { &Thing }
-}
-
-impl Render for Thing {
-    fn render(_this: &Instance<Self>) where Self: Class {
-        println!("Rendering thing...");
-    }
-}
-
-
-
-pub struct Instance<T: Class> {
-    pub id: Entity,
-    _class: PhantomData<T>,
-}
-
-impl<T: Class> Instance<T> {
-    #[inline]
-    pub fn class(&self) -> T {
-        T::class()
-    }
-}
-
-pub struct AnyInstance {
-    pub id: Entity,
-}
-
-
-
-pub trait Render {
-    fn render(this: &Instance<Self>) where Self: Class;
 }
 
 
