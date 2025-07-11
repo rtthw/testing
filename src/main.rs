@@ -5,7 +5,10 @@ use std::{any::Any, cell::Cell, marker::PhantomData, ops::Drop};
 
 
 
-fn main() {
+fn main() {}
+
+#[test]
+fn test() {
     struct Thing {
         a: u8,
     }
@@ -20,6 +23,7 @@ fn main() {
         }
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq)]
     struct Other {
         a: u8,
     }
@@ -34,16 +38,46 @@ fn main() {
         }
     }
 
-    let thing = add_node(Thing { a: 4 });
-    let other = add_node(Other { a: 5 });
+    let thing_id;
+    let other_id;
 
-    assert!(thing.lens(|thing| &mut thing.a).get() == Some(&mut 4));
-    assert!(other.lens(|other| &mut other.a).get() == Some(&mut 5));
+    {
+        let thing = add_node(Thing { a: 4 });
+        let other = add_node(Other { a: 5 });
 
-    update();
+        thing_id = thing.id.unwrap();
+        other_id = other.id.unwrap();
 
-    assert!(thing.lens(|thing| &mut thing.a).get() == Some(&mut 12));
-    assert!(other.lens(|other| &mut other.a).get() == Some(&mut 14));
+        assert!(thing.lens(|thing| &mut thing.a).get() == Some(&mut 4));
+        assert!(other.lens(|other| &mut other.a).get() == Some(&mut 5));
+
+        update();
+
+        assert!(thing.lens(|thing| &mut thing.a).get() == Some(&mut 12));
+        assert!(other.lens(|other| &mut other.a).get() == Some(&mut 14));
+
+        update();
+    }
+
+    assert!(find_node_by_type::<Thing>().unwrap().a == 13);
+    assert!(find_node_by_type::<Other>().unwrap().a == 15);
+
+    find_node_by_type::<Thing>().unwrap().add_member(Other { a: 1 });
+    find_node_by_type::<Other>().unwrap().add_member(Other { a: 2 });
+
+    assert!(find_nodes_by_type::<Other>().count() == 1);
+
+    // Should always iterate in order.
+    {
+        let mut other_members = find_members::<Other>();
+        assert!(other_members.next().unwrap().member == Other { a: 1 });
+        assert!(other_members.next().unwrap().member == Other { a: 2 });
+    }
+    {
+        let mut other_members = find_members::<Other>();
+        assert!(other_members.next().unwrap().node == thing_id);
+        assert!(other_members.next().unwrap().node == other_id);
+    }
 }
 
 
