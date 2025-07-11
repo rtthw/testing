@@ -5,14 +5,54 @@ use std::{any::Any, cell::Cell, marker::PhantomData, ops::Drop};
 
 
 
-fn main() {}
+fn main() {
+    struct Thing {
+        a: u8,
+    }
+
+    impl Node for Thing {
+        fn ready(mut node: RefMut<Self>) where Self: Sized {
+            node.a = 11;
+        }
+
+        fn update(mut node: RefMut<Self>) where Self: Sized {
+            node.a += 1;
+        }
+    }
+
+    struct Other {
+        a: u8,
+    }
+
+    impl Node for Other {
+        fn ready(mut node: RefMut<Self>) where Self: Sized {
+            node.a = 13;
+        }
+
+        fn update(mut node: RefMut<Self>) where Self: Sized {
+            node.a += 1;
+        }
+    }
+
+    let thing = add_node(Thing { a: 4 });
+    let other = add_node(Other { a: 5 });
+
+    assert!(thing.lens(|thing| &mut thing.a).get() == Some(&mut 4));
+    assert!(other.lens(|other| &mut other.a).get() == Some(&mut 5));
+
+    update();
+
+    assert!(thing.lens(|thing| &mut thing.a).get() == Some(&mut 12));
+    assert!(other.lens(|other| &mut other.a).get() == Some(&mut 14));
+}
 
 
 
+#[allow(unused)]
 pub trait Node {
-    fn ready(_node: RefMut<Self>) where Self: Sized {}
-    fn update(_node: RefMut<Self>) where Self: Sized  {}
-    fn render(_node: RefMut<Self>) where Self: Sized  {}
+    fn ready(node: RefMut<Self>) where Self: Sized {}
+    fn update(node: RefMut<Self>) where Self: Sized  {}
+    fn render(node: RefMut<Self>) where Self: Sized  {}
 }
 
 trait NodeAny: Any + Node {
@@ -33,13 +73,10 @@ impl<T: Node + 'static> NodeAny for T {
 
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Id {
+pub struct Id {
     id: usize,
     generation: u64,
 }
-
-#[derive(Clone, Copy, Debug)]
-pub struct HandleUntyped(Id);
 
 pub struct Handle<T: 'static> {
     id: Option<Id>,
@@ -82,7 +119,7 @@ impl<T> Handle<T> {
         };
 
         Field {
-            handle: HandleUntyped(self.id.unwrap()),
+            handle: self.id.unwrap(),
             offset,
             _marker: PhantomData,
         }
@@ -90,7 +127,7 @@ impl<T> Handle<T> {
 }
 
 pub struct Field<T> {
-    handle: HandleUntyped,
+    handle: Id,
     offset: isize,
     _marker: PhantomData<T>,
 }
@@ -106,7 +143,7 @@ impl<T> Field<T> {
 
 
 pub struct Member<T> {
-    pub node: HandleUntyped,
+    pub node: Id,
     pub member: T,
 }
 
@@ -168,8 +205,8 @@ pub struct RefMutAny<'a> {
     data: *mut (),
     used: *mut bool,
     vtable: *mut (),
-    capabilities: *mut Vec<Box<dyn Any>>,
-    handle: HandleUntyped,
+    members: *mut Vec<Box<dyn Any>>,
+    handle: Id,
 
     _marker: PhantomData<&'a ()>,
 }
@@ -179,7 +216,7 @@ impl<'a> RefMutAny<'a> {
         unsafe {
             *self.used = false;
         }
-        unsafe { get_scene() }.delete(self.handle.0);
+        unsafe { get_scene() }.delete(self.handle);
         std::mem::forget(self);
     }
 
@@ -187,10 +224,10 @@ impl<'a> RefMutAny<'a> {
         let res = RefMut {
             data: self.data as *mut T,
             handle: Handle {
-                id: Some(self.handle.0),
+                id: Some(self.handle),
                 _marker: PhantomData,
             },
-            members: self.capabilities,
+            members: self.members,
             used: self.used,
         };
 
@@ -268,7 +305,7 @@ impl Slot {
         }
     }
 
-    fn update<T: Node + 'static>(&mut self, data: T) {
+    fn put<T: Node + 'static>(&mut self, data: T) {
         assert!(size_of::<T>() <= self.data_len);
 
         let trait_obj = &data as &dyn NodeAny;
@@ -327,8 +364,7 @@ impl Scene {
         }
     }
 
-    pub fn get_any(&mut self, handle: HandleUntyped) -> Option<RefMutAny> {
-        let handle = handle.0;
+    pub fn get_any(&mut self, handle: Id) -> Option<RefMutAny> {
         let cell = self.nodes.get_mut(handle.id)?;
 
         if cell.is_none() {
@@ -349,8 +385,8 @@ impl Scene {
         Some(RefMutAny {
             data: cell.data,
             vtable: cell.vtable,
-            capabilities: &mut cell.members as _,
-            handle: HandleUntyped(cell.id),
+            members: &mut cell.members as _,
+            handle: cell.id,
             used: cell.used,
 
             _marker: PhantomData,
@@ -358,12 +394,12 @@ impl Scene {
     }
 
     pub fn get<T>(&mut self, handle: Handle<T>) -> Option<RefMut<T>> {
-        let ref_mut_any = self.get_any(HandleUntyped(handle.id?))?;
+        let ref_mut_any = self.get_any(handle.id?)?;
         Some(ref_mut_any.to_typed())
     }
 
-    fn iter(&self) -> MagicVecIterator {
-        MagicVecIterator {
+    fn iter(&self) -> SceneIterator {
+        SceneIterator {
             n: 0,
             len: self.dense.len(),
         }
@@ -379,7 +415,7 @@ impl Scene {
         {
             let mut free_node = self.free_nodes.remove(i);
 
-            free_node.update::<T>(data);
+            free_node.put::<T>(data);
 
             id = free_node.id;
 
@@ -429,7 +465,7 @@ impl Scene {
 
     pub fn update(&mut self) {
         for node in &mut self.iter() {
-            let cell = self.nodes[node.handle.0.id].as_mut().unwrap();
+            let cell = self.nodes[node.handle.id].as_mut().unwrap();
             if cell.initialized == false {
                 cell.initialized = true;
 
@@ -439,7 +475,7 @@ impl Scene {
         }
 
         for node in &mut self.iter() {
-            let cell = self.nodes[node.handle.0.id].as_mut().unwrap();
+            let cell = self.nodes[node.handle.id].as_mut().unwrap();
             let node: RefMut<()> = node.to_typed::<()>();
             unsafe { (*cell.update)(node) };
         }
@@ -534,12 +570,12 @@ impl Arena {
 
 
 
-pub struct MagicVecIterator {
+pub struct SceneIterator {
     n: usize,
     len: usize,
 }
 
-impl Iterator for MagicVecIterator {
+impl Iterator for SceneIterator {
     type Item = RefMutAny<'static>;
 
     fn next(&mut self) -> Option<RefMutAny<'static>> {
@@ -567,8 +603,8 @@ impl Iterator for MagicVecIterator {
         Some(RefMutAny {
             data: cell.data,
             vtable: cell.vtable,
-            capabilities: &mut cell.members as _,
-            handle: HandleUntyped(cell.id),
+            members: &mut cell.members as _,
+            handle: cell.id,
             used: cell.used,
             _marker: PhantomData,
         })
@@ -603,7 +639,7 @@ pub fn try_get_node<T: Node>(handle: Handle<T>) -> Option<RefMut<T>> {
     unsafe { get_scene() }.get(handle)
 }
 
-pub fn get_untyped_node(handle: HandleUntyped) -> Option<RefMutAny<'static>> {
+pub fn get_untyped_node(handle: Id) -> Option<RefMutAny<'static>> {
     unsafe { get_scene() }.get_any(handle)
 }
 
@@ -615,7 +651,7 @@ pub fn update() {
     unsafe { get_scene() }.update()
 }
 
-pub fn all_nodes() -> MagicVecIterator {
+pub fn all_nodes() -> SceneIterator {
     unsafe { get_scene() }.iter()
 }
 
@@ -629,12 +665,12 @@ pub fn find_node_by_type<T: Any>() -> Option<RefMut<T>> {
 pub fn find_members<T: Any + Copy>() -> impl Iterator<Item = Member<T>> {
     unsafe {
         get_scene().iter().filter_map(|node| {
-            (*node.capabilities)
+            (*node.members)
                 .iter()
-                .find(|capability| capability.is::<T>())
-                .map(|capability| Member {
+                .find(|member| member.is::<T>())
+                .map(|member| Member {
                     node: node.handle,
-                    member: *capability.downcast_ref::<T>().unwrap(),
+                    member: *member.downcast_ref::<T>().unwrap(),
                 })
         })
     }
