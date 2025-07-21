@@ -1836,6 +1836,7 @@ name = "testing"
 version = "0.1.0"
 dependencies = [
  "bog",
+ "hashbrown 0.15.4",
  "hecs",
  "rustc-hash 2.1.1",
  "slotmap",
