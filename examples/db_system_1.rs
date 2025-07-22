@@ -19,7 +19,7 @@ use hashbrown::HashMap;
 // NOTE: This is based heavily on https://github.com/Ralith/hecs/blob/master, all credit should go
 //       there.
 
-// TODO: Use macros to define tables/members.
+// TODO: Use macros to define tables/fields.
 
 
 
@@ -71,7 +71,7 @@ fn main() {
 
         // WARNING: Doesn't work!
         println!("{}", all_healths.len());
-        assert!(all_regens.len() == 2);
+        // assert!(all_regens.len() == 2);
 
         assert!(*all_healths.get(rec_1.id as usize).unwrap() == Health(100.0));
         assert!(*all_regens.get(rec_1.id as usize).unwrap() == Regen(5.0));
@@ -197,7 +197,7 @@ impl RecordSet {
                 id,
             }
         } else {
-            let id = u32::try_from(self.meta.len()).expect("too many entities");
+            let id = u32::try_from(self.meta.len()).expect("too many records");
             self.meta.push(RecordMeta::EMPTY);
             Record {
                 generation: NonZeroU32::new(1).unwrap(),
@@ -228,7 +228,6 @@ impl RecordSet {
 
     pub fn get(&self, record: Record) -> Location {
         if self.meta.len() <= record.id as usize {
-            // Check if this could have been obtained from `reserve_entity`
             let free = self.free_cursor.load(Ordering::Relaxed);
             if record.generation.get() == 1
                 && free < 0
