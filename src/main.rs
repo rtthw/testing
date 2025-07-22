@@ -8,7 +8,7 @@ extern crate test;
 
 use std::{alloc::{alloc, dealloc, handle_alloc_error, Layout}, any::TypeId, num::NonZeroU32, ops::Deref, ptr::NonNull, sync::atomic::AtomicIsize};
 
-use hashbrown::HashMap;
+use type_id::*;
 
 
 
@@ -56,7 +56,7 @@ fn main() {
 struct Database {
     records: RecordSet,
     columns: Vec<Column>,
-    column_index: HashMap<TypeId, u32>,
+    column_index: TypeIdMap<u32>,
 }
 
 impl Database {
@@ -382,6 +382,42 @@ impl<T: Field> Deref for ColumnRef<'_, T> {
 
 
 
+mod type_id {
+    use core::{any::TypeId, hash::{BuildHasherDefault, Hasher}};
+
+    use hashbrown::HashMap;
+
+    #[derive(Default)]
+    pub struct TypeIdHasher {
+        hash: u64,
+    }
+
+    impl Hasher for TypeIdHasher {
+        fn write_u64(&mut self, n: u64) {
+            // Only a single value can be hashed, so the old hash should be zero.
+            debug_assert_eq!(self.hash, 0);
+            self.hash = n;
+        }
+
+        fn write_u128(&mut self, n: u128) {
+            debug_assert_eq!(self.hash, 0);
+            self.hash = n as u64;
+        }
+
+        fn write(&mut self, _bytes: &[u8]) {
+            panic!("Type ID is the wrong type!")
+        }
+
+        fn finish(&self) -> u64 {
+            self.hash
+        }
+    }
+
+    pub type TypeIdMap<V> = HashMap<TypeId, V, BuildHasherDefault<TypeIdHasher>>;
+}
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,9 +438,11 @@ mod tests {
         let rec_2 = db.alloc();
         db.add_field(rec_2, Health(50.0));
         db.add_field(rec_2, Regen(7.0));
-        db.add_field(rec_2, Armor(3.0));
-        let rec_3 = db.alloc();
-        db.add_field(rec_3, Armor(15.0));
+
+        for i in 0..100 {
+            let rec = db.alloc();
+            db.add_field(rec, Armor(i as f32));
+        }
 
         // for (i, column) in db.columns.iter().enumerate() {
         //     println!(
@@ -418,32 +456,59 @@ mod tests {
 
     #[test]
     fn works() {
-        let db = define_test_db();
+        let mut db = define_test_db();
         assert!(db.columns.len() == 3);
+        let mut armor_acc = 0.0;
+        for armor in db.column::<Armor>().iter() {
+            armor_acc += armor.0;
+        }
+
+        assert!(armor_acc == (0..100).into_iter().fold(0.0, |acc, i| acc + i as f32));
     }
 
     #[bench]
-    fn bench_1(bencher: &mut test::Bencher) {
+    fn bench_pure_iter_100(bencher: &mut test::Bencher) {
         let mut db = define_test_db();
 
+        assert!(db.column::<Armor>().len() == 100);
+
         bencher.iter(|| {
-            let mut health_acc = 0.0;
-            let mut regen_acc = 0.0;
-            let mut armor_acc = 0.0;
-
-            for health in db.column::<Health>().iter() {
-                health_acc += health.0;
-            }
-            for regen in db.column::<Regen>().iter() {
-                regen_acc += regen.0;
-            }
             for armor in db.column::<Armor>().iter() {
-                armor_acc += armor.0;
+                // Use a black box to ensure the compiler doesn't optimize this away. A noop is
+                // about 12 times faster on my machine.
+                test::black_box(&armor);
             }
+        });
+    }
 
-            assert!(health_acc == 150.0);
-            assert!(regen_acc == 12.0);
-            assert!(armor_acc == 18.0);
+    #[bench]
+    fn bench_simple_acc_100(bencher: &mut test::Bencher) {
+        let mut db = define_test_db();
+
+        assert!(db.column::<Armor>().len() == 100);
+
+        bencher.iter(|| {
+            let mut acc = 0.0;
+            // This column iteration is almost (within a few nanoseconds) as fast as:
+            //      `(0..100).into_iter().fold(0.0, |acc, i| acc + i as f32)`
+            for armor in db.column::<Armor>().iter() {
+                acc += armor.0;
+            }
+            // Uncommenting this is a 2x slow down (as would be expected).
+            // assert!(acc == (0..100).into_iter().fold(0.0, |acc, i| acc + i as f32));
+
+            acc
+        });
+    }
+
+    #[bench]
+    fn bench_2(bencher: &mut test::Bencher) {
+        let mut db = define_test_db();
+        let record = db.alloc();
+
+        bencher.iter(|| {
+            db.add_field(record, Health(1.0));
+            assert!(db.column::<Health>().last() == Some(&Health(1.0)));
         });
     }
 }
