@@ -31,6 +31,9 @@ name = "behavior_registry_4"
 name = "bog_ui_1"
 
 [[example]]
+name = "db_system_1"
+
+[[example]]
 name = "function_dropper_1"
 
 [[example]]
