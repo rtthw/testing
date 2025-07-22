@@ -1,7 +1,16 @@
 
 
 
-use std::{alloc::{alloc, dealloc, handle_alloc_error, Layout}, any::{type_name, TypeId}, num::NonZeroU32, ptr::NonNull, sync::atomic::AtomicIsize};
+use std::{
+    alloc::{alloc, dealloc, handle_alloc_error, Layout},
+    any::{type_name, TypeId},
+    collections::HashMap,
+    marker::PhantomData,
+    num::NonZeroU32,
+    ops::Deref,
+    ptr::NonNull,
+    sync::atomic::{AtomicIsize, Ordering},
+};
 
 
 
@@ -21,7 +30,7 @@ fn main() {
         TypeInfo::of::<Regen>(),
     ]);
 
-    let records = RecordSet::default();
+    let db = Database::new();
 
     {
         let all_healths = Column::<Health>::new(&healthy_table).unwrap();
@@ -31,6 +40,47 @@ fn main() {
 
 
 
+pub struct Database {
+    records: RecordSet,
+    tables: TableSet,
+}
+
+impl Database {
+    pub fn new() -> Self {
+        Self {
+            records: RecordSet::default(),
+            tables: TableSet::new(),
+        }
+    }
+
+    pub fn record(&self, record: Record) -> RecordRef<'_> {
+        let loc = self.records.get(record);
+
+        RecordRef {
+            table: &self.tables.tables[loc.table as usize],
+            record,
+            index: loc.index,
+        }
+    }
+}
+
+struct TableSet {
+    index: HashMap<Box<[TypeId]>, u32>,
+    tables: Vec<Table>,
+}
+
+impl TableSet {
+    fn new() -> Self {
+        Self {
+            index: Some((Box::default(), 0)).into_iter().collect(),
+            tables: vec![Table::new(Vec::new())],
+        }
+    }
+}
+
+
+
+#[derive(Clone, Copy)]
 pub struct Record {
     id: u32,
     generation: NonZeroU32,
@@ -82,6 +132,29 @@ impl RecordSet {
         self.len -= 1;
 
         loc
+    }
+
+    pub fn get(&self, record: Record) -> Location {
+        if self.meta.len() <= record.id as usize {
+            // Check if this could have been obtained from `reserve_entity`
+            let free = self.free_cursor.load(Ordering::Relaxed);
+            if record.generation.get() == 1
+                && free < 0
+                && (record.id as isize) < (free.abs() + self.meta.len() as isize)
+            {
+                return Location {
+                    table: 0,
+                    index: u32::MAX,
+                };
+            } else {
+                panic!("no such record");
+            }
+        }
+        let meta = &self.meta[record.id as usize];
+        if meta.generation != record.generation || meta.location.index == u32::MAX {
+            panic!("no such record");
+        }
+        meta.location
     }
 
     pub fn clear(&mut self) {
@@ -344,6 +417,76 @@ pub struct RecordRef<'a> {
     table: &'a Table,
     record: Record,
     index: u32,
+}
+
+pub trait FieldRef<'a> {
+    type Ref;
+    type Column;
+
+    fn get_field(record: RecordRef<'a>) -> Option<Self::Ref>;
+    fn get_column(table: &'a Table) -> Option<Self::Column>;
+}
+
+impl<'a, T: Field> FieldRef<'a> for &'a T {
+    type Ref = Ref<'a, T>;
+    type Column = Column<'a, T>;
+
+    fn get_field(record: RecordRef<'a>) -> Option<Self::Ref> {
+        Some(unsafe { Ref::new(record.table, record.index)? })
+    }
+
+    fn get_column(table: &'a Table) -> Option<Self::Column> {
+        Column::new(table)
+    }
+}
+
+
+
+pub struct Ref<'a, T: ?Sized> {
+    borrow: FieldBorrow<'a>,
+    target: NonNull<T>,
+    _marker: PhantomData<&'a T>,
+}
+
+impl<'a, T: Field> Ref<'a, T> {
+    unsafe fn new(table: &'a Table, index: u32) -> Option<Self> {
+        let (target, borrow) = unsafe { FieldBorrow::new::<T>(table, index) }?;
+
+        Some(Self {
+            borrow,
+            target,
+            _marker: PhantomData,
+        })
+    }
+}
+
+impl<T: ?Sized> Deref for Ref<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { self.target.as_ref() }
+    }
+}
+
+struct FieldBorrow<'a> {
+    table: &'a Table,
+    state: usize,
+}
+
+impl<'a> FieldBorrow<'a> {
+    // This method is unsafe as if the `index` is out of bounds,
+    // then this will cause undefined behavior as the returned
+    // `target` will point to undefined memory.
+    unsafe fn new<T: Field>(table: &'a Table, index: u32) -> Option<(NonNull<T>, Self)> {
+        let state = table.get_state::<T>()?;
+
+        let target = unsafe {
+            NonNull::new_unchecked(table.get_base::<T>(state).as_ptr().add(index as usize))
+        };
+
+        table.borrow::<T>(state);
+
+        Some((target, Self { table, state }))
+    }
 }
 
 
