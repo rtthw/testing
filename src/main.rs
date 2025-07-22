@@ -1,7 +1,12 @@
 
+#![allow(unstable_features)]
+#![feature(test)]
 
 
-use std::{alloc::{alloc, dealloc, handle_alloc_error, Layout}, any::TypeId, num::NonZeroU32, ptr::NonNull, sync::atomic::AtomicIsize};
+extern crate test;
+
+
+use std::{alloc::{alloc, dealloc, handle_alloc_error, Layout}, any::TypeId, num::NonZeroU32, ops::Deref, ptr::NonNull, sync::atomic::AtomicIsize};
 
 use hashbrown::HashMap;
 
@@ -28,7 +33,20 @@ fn main() {
     db.add_field(rec_3, Armor(15.0));
 
     for (i, column) in db.columns.iter().enumerate() {
-        println!("COLUMN #{i}: {:?}", column.records);
+        println!(
+            "COLUMN #{i}: {:?}",
+            column.records.iter().take_while(|i| **i != u32::MAX).collect::<Vec<_>>(),
+        );
+    }
+
+    for health in db.column::<Health>().iter() {
+        println!("HEALTH: {}", health.0);
+    }
+    for regen in db.column::<Regen>().iter() {
+        println!("REGEN: {}", regen.0);
+    }
+    for armor in db.column::<Armor>().iter() {
+        println!("ARMOR: {}", armor.0);
     }
 }
 
@@ -66,6 +84,22 @@ impl Database {
             core::mem::forget(field);
             self.records.meta[record.id as usize].index = index;
         }
+    }
+
+    pub fn column<T: Field>(&mut self) -> ColumnRef<'_, T> {
+        let field_id = TypeId::of::<T>();
+        let column_id = self.column_index
+            .get(&field_id)
+            .copied()
+            .unwrap_or_else(|| {
+                let x = self.columns.len() as u32;
+                self.columns.push(Column::new(TypeInfo::of::<T>()));
+                let old = self.column_index.insert(field_id, x);
+                debug_assert!(old.is_none(), "inserted duplicate field");
+                x
+            });
+
+        ColumnRef::new(&self.columns[column_id as usize])
     }
 }
 
@@ -317,5 +351,99 @@ impl TypeInfo {
 
     pub unsafe fn drop(&self, data: *mut u8) {
         unsafe { (self.drop)(data) }
+    }
+}
+
+
+
+pub struct ColumnRef<'a, T: Field> {
+    column: &'a Column,
+    data: &'a [T],
+}
+
+impl<'a, T: Field> ColumnRef<'a, T> {
+    pub fn new(column: &'a Column) -> Self {
+        let ptr = unsafe { column.get_base::<T>() };
+        let data = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), column.len as usize) };
+
+        Self {
+            column,
+            data,
+        }
+    }
+}
+
+impl<T: Field> Deref for ColumnRef<'_, T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        self.data
+    }
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(PartialEq)]
+    struct Health(f32);
+    #[derive(PartialEq)]
+    struct Regen(f32);
+    #[derive(PartialEq)]
+    struct Armor(f32);
+
+    fn define_test_db() -> Database {
+        let mut db = Database::default();
+
+        let rec_1 = db.alloc();
+        db.add_field(rec_1, Health(100.0));
+        db.add_field(rec_1, Regen(5.0));
+        let rec_2 = db.alloc();
+        db.add_field(rec_2, Health(50.0));
+        db.add_field(rec_2, Regen(7.0));
+        db.add_field(rec_2, Armor(3.0));
+        let rec_3 = db.alloc();
+        db.add_field(rec_3, Armor(15.0));
+
+        // for (i, column) in db.columns.iter().enumerate() {
+        //     println!(
+        //         "COLUMN #{i}: {:?}",
+        //         column.records.iter().take_while(|i| **i != u32::MAX).collect::<Vec<_>>(),
+        //     );
+        // }
+
+        db
+    }
+
+    #[test]
+    fn works() {
+        let db = define_test_db();
+        assert!(db.columns.len() == 3);
+    }
+
+    #[bench]
+    fn bench_1(bencher: &mut test::Bencher) {
+        let mut db = define_test_db();
+
+        bencher.iter(|| {
+            let mut health_acc = 0.0;
+            let mut regen_acc = 0.0;
+            let mut armor_acc = 0.0;
+
+            for health in db.column::<Health>().iter() {
+                health_acc += health.0;
+            }
+            for regen in db.column::<Regen>().iter() {
+                regen_acc += regen.0;
+            }
+            for armor in db.column::<Armor>().iter() {
+                armor_acc += armor.0;
+            }
+
+            assert!(health_acc == 150.0);
+            assert!(regen_acc == 12.0);
+            assert!(armor_acc == 18.0);
+        });
     }
 }
