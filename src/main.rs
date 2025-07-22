@@ -4,11 +4,12 @@
 use std::{
     alloc::{alloc, dealloc, handle_alloc_error, Layout},
     any::{type_name, TypeId},
+    borrow::Borrow,
     collections::HashMap,
     marker::PhantomData,
     num::NonZeroU32,
     ops::Deref,
-    ptr::NonNull,
+    ptr::{copy_nonoverlapping, NonNull},
     sync::atomic::{AtomicIsize, Ordering},
 };
 
@@ -22,19 +23,27 @@ use std::{
 
 
 fn main() {
+    #[derive(PartialEq)]
     struct Health(f32);
+    #[derive(PartialEq)]
     struct Regen(f32);
 
-    let healthy_table = Table::new(vec![
-        TypeInfo::of::<Health>(),
-        TypeInfo::of::<Regen>(),
-    ]);
+    let mut db = Database::new();
 
-    let db = Database::new();
+    let rec_1 = db.alloc();
+    db.put(rec_1, (Health(100.0), Regen(5.0)));
 
     {
-        let all_healths = Column::<Health>::new(&healthy_table).unwrap();
-        let all_regens = Column::<Regen>::new(&healthy_table).unwrap();
+        let rec = db.record(rec_1);
+
+        let all_healths = Column::<Health>::new(rec.table).unwrap();
+        let all_regens = Column::<Regen>::new(rec.table).unwrap();
+
+        assert!(all_healths.len() == 1);
+        assert!(all_regens.len() == 1);
+
+        assert!(*all_healths.get(rec_1.id as usize).unwrap() == Health(100.0));
+        assert!(*all_regens.get(rec_1.id as usize).unwrap() == Regen(5.0));
     }
 }
 
@@ -50,6 +59,26 @@ impl Database {
         Self {
             records: RecordSet::default(),
             tables: TableSet::new(),
+        }
+    }
+
+    pub fn alloc(&mut self) -> Record {
+        self.records.alloc()
+    }
+
+    pub fn put(&mut self, record: Record, fields: impl FieldSet) {
+        let table_id = fields.with_ids(|ids| self.tables.get(ids, || fields.type_info()));
+
+        let table = &mut self.tables.tables[table_id as usize];
+        unsafe {
+            let index = table.allocate(record.id);
+            fields.put(|ptr, ty| {
+                table.put_dynamic(ptr, ty.id(), ty.layout.size(), index);
+            });
+            self.records.meta[record.id as usize].location = Location {
+                table: table_id,
+                index,
+            };
         }
     }
 
@@ -75,6 +104,25 @@ impl TableSet {
             index: Some((Box::default(), 0)).into_iter().collect(),
             tables: vec![Table::new(Vec::new())],
         }
+    }
+
+    fn get<T: Borrow<[TypeId]> + Into<Box<[TypeId]>>>(
+        &mut self,
+        fields: T,
+        info: impl FnOnce() -> Vec<TypeInfo>,
+    ) -> u32 {
+        self.index
+            .get(fields.borrow())
+            .copied()
+            .unwrap_or_else(|| self.insert(fields.into(), info()))
+    }
+
+    fn insert(&mut self, fields: Box<[TypeId]>, info: Vec<TypeInfo>) -> u32 {
+        let x = self.tables.len() as u32;
+        self.tables.push(Table::new(info));
+        let old = self.index.insert(fields, x);
+        debug_assert!(old.is_none(), "inserted duplicate table");
+        x
     }
 }
 
@@ -348,6 +396,39 @@ impl Table {
     }
 }
 
+impl Table {
+    unsafe fn get_dynamic(
+        &self,
+        ty: TypeId,
+        size: usize,
+        index: u32,
+    ) -> Option<NonNull<u8>> {
+        debug_assert!(index <= self.len);
+        Some(unsafe { NonNull::new_unchecked(
+            self.data
+                .get_unchecked(*self.index.get(&ty)?)
+                .storage
+                .as_ptr()
+                .add(size * index as usize)
+                .cast::<u8>(),
+        ) })
+    }
+
+    unsafe fn put_dynamic(
+        &mut self,
+        field: *mut u8,
+        ty: TypeId,
+        size: usize,
+        index: u32,
+    ) {
+        let ptr = unsafe { self.get_dynamic(ty, size, index) }
+            .unwrap()
+            .as_ptr()
+            .cast::<u8>();
+        unsafe { copy_nonoverlapping(field, ptr, size); }
+    }
+}
+
 impl Drop for Table {
     fn drop(&mut self) {
         self.clear();
@@ -374,6 +455,101 @@ pub trait Field: Send + Sync + 'static {}
 
 impl<T: Send + Sync + 'static> Field for T {}
 
+pub unsafe trait FieldSet {
+    fn key(&self) -> Option<TypeId>;
+    fn with_ids<T>(&self, f: impl FnOnce(&[TypeId]) -> T) -> T;
+    fn type_info(&self) -> Vec<TypeInfo>;
+    unsafe fn put(self, f: impl FnMut(*mut u8, TypeInfo));
+}
+
+unsafe trait FieldSetInner: FieldSet {
+    fn with_static_ids<T>(f: impl FnOnce(&[TypeId]) -> T) -> T;
+    fn with_static_type_info<T>(f: impl FnOnce(&[TypeInfo]) -> T) -> T;
+}
+
+mod macros {
+    use super::*;
+
+    macro_rules! tuple_impl {
+        ($($name: ident),*) => {
+            unsafe impl<$($name: Field),*> FieldSet for ($($name,)*) {
+                fn key(&self) -> Option<TypeId> {
+                    Some(TypeId::of::<Self>())
+                }
+
+                fn with_ids<T>(&self, f: impl FnOnce(&[TypeId]) -> T) -> T {
+                    Self::with_static_ids(f)
+                }
+
+                fn type_info(&self) -> Vec<TypeInfo> {
+                    Self::with_static_type_info(|info| info.to_vec())
+                }
+
+                #[allow(unused_variables, unused_mut)]
+                unsafe fn put(self, mut f: impl FnMut(*mut u8, TypeInfo)) {
+                    #[allow(non_snake_case)]
+                    let ($(mut $name,)*) = self;
+                    $(
+                        f(
+                            (&mut $name as *mut $name).cast::<u8>(),
+                            TypeInfo::of::<$name>()
+                        );
+                        core::mem::forget($name);
+                    )*
+                }
+            }
+
+            unsafe impl<$($name: Field),*> FieldSetInner for ($($name,)*) {
+                fn with_static_ids<T>(f: impl FnOnce(&[TypeId]) -> T) -> T {
+                    const N: usize = count!($($name),*);
+                    let mut xs: [(usize, TypeId); N] = [$((core::mem::align_of::<$name>(), TypeId::of::<$name>())),*];
+                    xs.sort_unstable_by(|x, y| x.0.cmp(&y.0).reverse().then(x.1.cmp(&y.1)));
+                    let mut ids = [TypeId::of::<()>(); N];
+                    for (slot, &(_, id)) in ids.iter_mut().zip(xs.iter()) {
+                        *slot = id;
+                    }
+                    f(&ids)
+                }
+
+                fn with_static_type_info<T>(f: impl FnOnce(&[TypeInfo]) -> T) -> T {
+                    const N: usize = count!($($name),*);
+                    let mut xs: [TypeInfo; N] = [$(TypeInfo::of::<$name>()),*];
+                    xs.sort_unstable();
+                    f(&xs)
+                }
+            }
+        };
+    }
+
+    macro_rules! count {
+        () => { 0 };
+        ($x: ident $(, $rest: ident)*) => { 1 + count!($($rest),*) };
+    }
+
+    macro_rules! reverse_apply {
+        ($m: ident [] $($reversed:tt)*) => {
+            $m!{$($reversed),*}  // base case
+        };
+        ($m: ident [$first:tt $($rest:tt)*] $($reversed:tt)*) => {
+            reverse_apply!{$m [$($rest)*] $first $($reversed)*}
+        };
+    }
+
+    macro_rules! smaller_tuples_too {
+        ($m: ident, $next: tt) => {
+            $m!{}
+            $m!{$next}
+        };
+        ($m: ident, $next: tt, $($rest: tt),*) => {
+            smaller_tuples_too!{$m, $($rest),*}
+            reverse_apply!{$m [$next $($rest)*]}
+        };
+    }
+
+    smaller_tuples_too!(tuple_impl, O, N, M, L, K, J, I, H, G, F, E, D, C, B, A);
+}
+
+#[derive(Clone)]
 pub struct TypeInfo {
     id: TypeId,
     layout: Layout,
@@ -403,6 +579,30 @@ impl TypeInfo {
 
     pub unsafe fn drop(&self, data: *mut u8) {
         unsafe { (self.drop)(data) }
+    }
+}
+
+impl PartialEq for TypeInfo {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for TypeInfo {}
+
+impl PartialOrd for TypeInfo {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TypeInfo {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.layout
+            .align()
+            .cmp(&other.layout.align())
+            .reverse()
+            .then_with(|| self.id.cmp(&other.id))
     }
 }
 
@@ -507,6 +707,13 @@ impl<'a, T: Field> Column<'a, T> {
             table,
             column,
         })
+    }
+}
+
+impl<T: Field> Deref for Column<'_, T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        self.column
     }
 }
 
