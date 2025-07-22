@@ -76,6 +76,7 @@ fn get_player_armor(world: &World) -> f32 {
 
 
 #[derive(Clone, Copy, Eq, PartialEq)]
+#[allow(unpredictable_function_pointer_comparisons)]
 pub struct Effect {
     pub activate: fn(&mut Data) -> Entity,
     pub deactivate: fn(&mut Data, Entity),

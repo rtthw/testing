@@ -398,7 +398,7 @@ impl Scene {
         }
     }
 
-    pub fn get_any(&mut self, handle: Id) -> Option<RefMutAny> {
+    pub fn get_any(&mut self, handle: Id) -> Option<RefMutAny<'_>> {
         let cell = self.nodes.get_mut(handle.id)?;
 
         if cell.is_none() {

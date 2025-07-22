@@ -179,7 +179,7 @@ impl RecordMeta {
     };
 }
 
-trait Field: 'static {}
+pub trait Field: 'static {}
 
 impl<T: 'static> Field for T {}
 
@@ -357,18 +357,18 @@ impl TypeInfo {
 
 
 pub struct ColumnRef<'a, T: Field> {
-    column: &'a Column,
     data: &'a [T],
+    _column: &'a Column,
 }
 
 impl<'a, T: Field> ColumnRef<'a, T> {
-    pub fn new(column: &'a Column) -> Self {
+    fn new(column: &'a Column) -> Self {
         let ptr = unsafe { column.get_base::<T>() };
         let data = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), column.len as usize) };
 
         Self {
-            column,
             data,
+            _column: column,
         }
     }
 }
