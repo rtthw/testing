@@ -23,29 +23,29 @@ fn main() {
     let mut db = Database::default();
 
     let rec_1 = db.alloc();
-    db.add_field(rec_1, Health(100.0));
-    db.add_field(rec_1, Regen(5.0));
+    db.add_to_table(rec_1, Health(100.0));
+    db.add_to_table(rec_1, Regen(5.0));
     let rec_2 = db.alloc();
-    db.add_field(rec_2, Health(50.0));
-    db.add_field(rec_2, Regen(7.0));
-    db.add_field(rec_2, Armor(3.0));
+    db.add_to_table(rec_2, Health(50.0));
+    db.add_to_table(rec_2, Regen(7.0));
+    db.add_to_table(rec_2, Armor(3.0));
     let rec_3 = db.alloc();
-    db.add_field(rec_3, Armor(15.0));
+    db.add_to_table(rec_3, Armor(15.0));
 
-    for (i, column) in db.columns.iter().enumerate() {
+    for (i, table) in db.tables.iter().enumerate() {
         println!(
-            "COLUMN #{i}: {:?}",
-            column.records.iter().take_while(|i| **i != u32::MAX).collect::<Vec<_>>(),
+            "TABLE #{i}: {:?}",
+            table.records.iter().take_while(|i| **i != u32::MAX).collect::<Vec<_>>(),
         );
     }
 
-    for health in db.column::<Health>().iter() {
+    for health in db.table::<Health>().iter() {
         println!("HEALTH: {}", health.0);
     }
-    for regen in db.column::<Regen>().iter() {
+    for regen in db.table::<Regen>().iter() {
         println!("REGEN: {}", regen.0);
     }
-    for armor in db.column::<Armor>().iter() {
+    for armor in db.table::<Armor>().iter() {
         println!("ARMOR: {}", armor.0);
     }
 }
@@ -55,8 +55,8 @@ fn main() {
 #[derive(Default)]
 struct Database {
     records: RecordSet,
-    columns: Vec<Column>,
-    column_index: TypeIdMap<u32>,
+    tables: Vec<TableImpl>,
+    table_index: TypeIdMap<u32>,
 }
 
 impl Database {
@@ -64,42 +64,42 @@ impl Database {
         self.records.alloc()
     }
 
-    pub fn add_field<T: Field>(&mut self, record: Record, mut field: T) {
+    pub fn add_to_table<T: Table>(&mut self, record: Record, mut row: T) {
         let field_id = TypeId::of::<T>();
-        let column_id = self.column_index
+        let table_id = self.table_index
             .get(&field_id)
             .copied()
             .unwrap_or_else(|| {
-                let x = self.columns.len() as u32;
-                self.columns.push(Column::new(TypeInfo::of::<T>()));
-                let old = self.column_index.insert(field_id, x);
+                let x = self.tables.len() as u32;
+                self.tables.push(TableImpl::new(TypeInfo::of::<T>()));
+                let old = self.table_index.insert(field_id, x);
                 debug_assert!(old.is_none(), "inserted duplicate field");
                 x
             });
 
-        let column = &mut self.columns[column_id as usize];
+        let table = &mut self.tables[table_id as usize];
         unsafe {
-            let index = column.alloc(record.id);
-            column.put_dynamic((&mut field as *mut T).cast::<u8>(), index);
-            core::mem::forget(field);
+            let index = table.alloc(record.id);
+            table.put_dynamic((&mut row as *mut T).cast::<u8>(), index);
+            core::mem::forget(row);
             self.records.meta[record.id as usize].index = index;
         }
     }
 
-    pub fn column<T: Field>(&mut self) -> ColumnRef<'_, T> {
-        let field_id = TypeId::of::<T>();
-        let column_id = self.column_index
-            .get(&field_id)
+    pub fn table<T: Table>(&mut self) -> TableRef<'_, T> {
+        let type_id = TypeId::of::<T>();
+        let table_id = self.table_index
+            .get(&type_id)
             .copied()
             .unwrap_or_else(|| {
-                let x = self.columns.len() as u32;
-                self.columns.push(Column::new(TypeInfo::of::<T>()));
-                let old = self.column_index.insert(field_id, x);
+                let x = self.tables.len() as u32;
+                self.tables.push(TableImpl::new(TypeInfo::of::<T>()));
+                let old = self.table_index.insert(type_id, x);
                 debug_assert!(old.is_none(), "inserted duplicate field");
                 x
             });
 
-        ColumnRef::new(&self.columns[column_id as usize])
+        TableRef::new(&self.tables[table_id as usize])
     }
 }
 
@@ -179,18 +179,18 @@ impl RecordMeta {
     };
 }
 
-pub trait Field: 'static {}
+pub trait Table: 'static {}
 
-impl<T: 'static> Field for T {}
+impl<T: 'static> Table for T {}
 
-struct Column {
+struct TableImpl {
     data: NonNull<u8>,
     len: u32,
     records: Box<[u32]>,
     type_info: TypeInfo,
 }
 
-impl Column {
+impl TableImpl {
     pub fn new(type_info: TypeInfo) -> Self {
         Self {
             data: NonNull::new(type_info.layout.align() as *mut u8).unwrap(),
@@ -248,7 +248,7 @@ impl Column {
         };
 
         // Now that we've successfully constructed a replacement, we can
-        // deallocate the old column data without risking `self.ptr` being left
+        // deallocate the old table data without risking `self.ptr` being left
         // partially deallocated on OOM.
         if old_cap > 0 {
             if self.type_info.layout.size() != 0 {
@@ -278,14 +278,14 @@ impl Column {
         self.len = 0;
     }
 
-    unsafe fn get_base<T: Field>(&self) -> NonNull<T> {
+    unsafe fn get_base<T: Table>(&self) -> NonNull<T> {
         unsafe {
             NonNull::new_unchecked(self.data.as_ptr().cast::<T>())
         }
     }
 }
 
-impl Column {
+impl TableImpl {
     unsafe fn get_dynamic(&self, index: u32) -> Option<NonNull<u8>> {
         debug_assert!(index <= self.len);
         Some(unsafe { NonNull::new_unchecked(
@@ -305,7 +305,7 @@ impl Column {
     }
 }
 
-impl Drop for Column {
+impl Drop for TableImpl {
     fn drop(&mut self) {
         self.clear();
         if self.records.is_empty() {
@@ -356,25 +356,26 @@ impl TypeInfo {
 
 
 
-pub struct ColumnRef<'a, T: Field> {
+pub struct TableRef<'a, T: Table> {
     data: &'a [T],
-    _column: &'a Column,
+    _table: &'a TableImpl,
 }
 
-impl<'a, T: Field> ColumnRef<'a, T> {
-    fn new(column: &'a Column) -> Self {
-        let ptr = unsafe { column.get_base::<T>() };
-        let data = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), column.len as usize) };
+impl<'a, T: Table> TableRef<'a, T> {
+    fn new(table: &'a TableImpl) -> Self {
+        let ptr = unsafe { table.get_base::<T>() };
+        let data = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), table.len as usize) };
 
         Self {
             data,
-            _column: column,
+            _table: table,
         }
     }
 }
 
-impl<T: Field> Deref for ColumnRef<'_, T> {
+impl<T: Table> Deref for TableRef<'_, T> {
     type Target = [T];
+
     fn deref(&self) -> &[T] {
         self.data
     }
@@ -433,21 +434,21 @@ mod tests {
         let mut db = Database::default();
 
         let rec_1 = db.alloc();
-        db.add_field(rec_1, Health(100.0));
-        db.add_field(rec_1, Regen(5.0));
+        db.add_to_table(rec_1, Health(100.0));
+        db.add_to_table(rec_1, Regen(5.0));
         let rec_2 = db.alloc();
-        db.add_field(rec_2, Health(50.0));
-        db.add_field(rec_2, Regen(7.0));
+        db.add_to_table(rec_2, Health(50.0));
+        db.add_to_table(rec_2, Regen(7.0));
 
         for i in 0..100 {
             let rec = db.alloc();
-            db.add_field(rec, Armor(i as f32));
+            db.add_to_table(rec, Armor(i as f32));
         }
 
-        // for (i, column) in db.columns.iter().enumerate() {
+        // for (i, table) in db.tables.iter().enumerate() {
         //     println!(
-        //         "COLUMN #{i}: {:?}",
-        //         column.records.iter().take_while(|i| **i != u32::MAX).collect::<Vec<_>>(),
+        //         "TABLE #{i}: {:?}",
+        //         table.records.iter().take_while(|i| **i != u32::MAX).collect::<Vec<_>>(),
         //     );
         // }
 
@@ -457,9 +458,9 @@ mod tests {
     #[test]
     fn works() {
         let mut db = define_test_db();
-        assert!(db.columns.len() == 3);
+        assert!(db.tables.len() == 3);
         let mut armor_acc = 0.0;
-        for armor in db.column::<Armor>().iter() {
+        for armor in db.table::<Armor>().iter() {
             armor_acc += armor.0;
         }
 
@@ -470,10 +471,10 @@ mod tests {
     fn bench_pure_iter_100(bencher: &mut test::Bencher) {
         let mut db = define_test_db();
 
-        assert!(db.column::<Armor>().len() == 100);
+        assert!(db.table::<Armor>().len() == 100);
 
         bencher.iter(|| {
-            for armor in db.column::<Armor>().iter() {
+            for armor in db.table::<Armor>().iter() {
                 // Use a black box to ensure the compiler doesn't optimize this away. A noop is
                 // about 12 times faster on my machine.
                 test::black_box(&armor);
@@ -485,13 +486,13 @@ mod tests {
     fn bench_simple_acc_100(bencher: &mut test::Bencher) {
         let mut db = define_test_db();
 
-        assert!(db.column::<Armor>().len() == 100);
+        assert!(db.table::<Armor>().len() == 100);
 
         bencher.iter(|| {
             let mut acc = 0.0;
-            // This column iteration is almost (within a few nanoseconds) as fast as:
+            // This table iteration is almost (within a few nanoseconds) as fast as:
             //      `(0..100).into_iter().fold(0.0, |acc, i| acc + i as f32)`
-            for armor in db.column::<Armor>().iter() {
+            for armor in db.table::<Armor>().iter() {
                 acc += armor.0;
             }
             // Uncommenting this is a 2x slow down (as would be expected).
@@ -507,8 +508,8 @@ mod tests {
         let record = db.alloc();
 
         bencher.iter(|| {
-            db.add_field(record, Health(1.0));
-            assert!(db.column::<Health>().last() == Some(&Health(1.0)));
+            db.add_to_table(record, Health(1.0));
+            assert!(db.table::<Health>().last() == Some(&Health(1.0)));
         });
     }
 }
