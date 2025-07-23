@@ -25,13 +25,25 @@ fn main() {
     let rec_1 = db.alloc();
     db.add_to_table(rec_1, Health(100.0));
     db.add_to_table(rec_1, Regen(5.0));
+    println!("...");
+    for (i, rec) in db.records.meta.iter().enumerate() {
+        println!("RECORD #{i}: {:?}, {}", rec.index, rec.generation);
+    }
     let rec_2 = db.alloc();
     db.add_to_table(rec_2, Health(50.0));
     db.add_to_table(rec_2, Regen(7.0));
     db.add_to_table(rec_2, Armor(3.0));
+    println!("...");
+    for (i, rec) in db.records.meta.iter().enumerate() {
+        println!("RECORD #{i}: {:?}, {}", rec.index, rec.generation);
+    }
     let rec_3 = db.alloc();
     db.add_to_table(rec_3, Armor(15.0));
 
+    println!("...");
+    for (i, rec) in db.records.meta.iter().enumerate() {
+        println!("RECORD #{i}: {:?}, {}", rec.index, rec.generation);
+    }
     for (i, table) in db.tables.iter().enumerate() {
         println!(
             "TABLE #{i}: {:?}",
@@ -82,7 +94,7 @@ impl Database {
             let index = table.alloc(record.id);
             table.put_dynamic((&mut row as *mut T).cast::<u8>(), index);
             core::mem::forget(row);
-            self.records.meta[record.id as usize].index = index;
+            self.records.meta[record.id as usize].index.push(index);
         }
     }
 
@@ -129,7 +141,10 @@ impl RecordSet {
             }
         } else {
             let id = u32::try_from(self.meta.len()).expect("too many records");
-            self.meta.push(RecordMeta::EMPTY);
+            self.meta.push(RecordMeta {
+                generation: NonZeroU32::new(1).unwrap(),
+                index: Vec::with_capacity(1),
+            });
             Record {
                 generation: NonZeroU32::new(1).unwrap(),
                 id,
@@ -139,14 +154,14 @@ impl RecordSet {
 
     pub fn free(&mut self, record: Record) {
         let meta = self.meta.get_mut(record.id as usize).expect("no such record");
-        if meta.generation != record.generation || meta.index == u32::MAX {
+        if meta.generation != record.generation || meta.index.is_empty() {
             panic!("no such record");
         }
 
         meta.generation = NonZeroU32::new(u32::from(meta.generation).wrapping_add(1))
             .unwrap_or_else(|| NonZeroU32::new(1).unwrap());
 
-        let _ = core::mem::replace(&mut meta.index, RecordMeta::EMPTY.index);
+        let _ = core::mem::replace(&mut meta.index, Vec::with_capacity(1));
 
         self.pending.push(record.id);
 
@@ -163,21 +178,13 @@ impl RecordSet {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct RecordMeta {
     generation: NonZeroU32,
-    index: u32,
+    index: Vec<u32>,
 }
 
-impl RecordMeta {
-    const EMPTY: RecordMeta = RecordMeta {
-        generation: match NonZeroU32::new(1) {
-            Some(x) => x,
-            None => unreachable!(),
-        },
-        index: u32::MAX, // Dummy value, to be filled in later.
-    };
-}
+
 
 pub trait Table: 'static {}
 
@@ -483,6 +490,27 @@ mod tests {
     }
 
     #[bench]
+    fn bench_pure_iter_1000(bencher: &mut test::Bencher) {
+        let mut db = define_test_db();
+
+        struct Thing(i32);
+
+        for i in 0..1000 {
+            let rec = db.alloc();
+            db.add_to_table(rec, Thing(i));
+        }
+
+        assert!(db.table::<Thing>().len() == 1000);
+
+        bencher.iter(|| {
+            for thing in db.table::<Thing>().iter() {
+                // Use a black box to ensure the compiler doesn't optimize this away.
+                test::black_box(&thing.0);
+            }
+        });
+    }
+
+    #[bench]
     fn bench_simple_acc_100(bencher: &mut test::Bencher) {
         let mut db = define_test_db();
 
@@ -503,7 +531,7 @@ mod tests {
     }
 
     #[bench]
-    fn bench_2(bencher: &mut test::Bencher) {
+    fn bench_add_to_table(bencher: &mut test::Bencher) {
         let mut db = define_test_db();
         let record = db.alloc();
 
