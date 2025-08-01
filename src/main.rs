@@ -2,7 +2,7 @@
 #![allow(soft_unstable)]
 #![feature(test)]
 
-use std::{alloc::{alloc, dealloc, handle_alloc_error, Layout}, any::TypeId, ops::Deref, ptr::NonNull};
+use std::{alloc::{alloc, dealloc, handle_alloc_error, Layout}, any::TypeId, marker::PhantomData, ops::Deref, ptr::NonNull};
 
 use testing::TypeMap;
 
@@ -66,6 +66,23 @@ impl Map {
 pub struct Value {
     type_id: TypeId,
     index: u32,
+}
+
+impl Value {
+    pub fn get<T: 'static>(&self, map: &Map) -> Option<&T> {
+        debug_assert!(self.type_id == TypeId::of::<T>());
+
+        Some(unsafe { self.get_unchecked(map) })
+    }
+
+    pub unsafe fn get_unchecked<T: 'static>(&self, map: &Map) -> &T {
+        unsafe {
+            map.inner.get::<T>().unwrap()
+                .get_dynamic(self.index).unwrap()
+                .cast::<T>()
+                .as_ref()
+        }
+    }
 }
 
 pub struct Element {
@@ -200,7 +217,7 @@ impl List {
 
 pub struct ValuesRef<'a, T: 'static> {
     elements: &'a [T],
-    _data: &'a List,
+    _data: PhantomData<&'a List>,
 }
 
 impl<'a, T: 'static> ValuesRef<'a, T> {
@@ -210,7 +227,7 @@ impl<'a, T: 'static> ValuesRef<'a, T> {
 
         Self {
             elements,
-            _data: list,
+            _data: PhantomData,
         }
     }
 }
@@ -247,7 +264,7 @@ mod tests {
         let mut map = Map::default();
         map.register::<u32>();
 
-        for i in 0..10000_u32 {
+        for i in 0..1000_u32 {
             let key = map.alloc();
             map.insert(key, i);
         }
@@ -264,7 +281,7 @@ mod tests {
 
     #[bench]
     fn bench_iter_acc_vec(bencher: &mut test::Bencher) {
-        let vec = (0..10000_u32).collect::<Vec<_>>();
+        let vec = (0..1000_u32).collect::<Vec<_>>();
 
         bencher.iter(|| {
             let mut acc = 0;
