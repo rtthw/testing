@@ -37,6 +37,9 @@ name = "db_system_1"
 name = "db_system_2"
 
 [[example]]
+name = "db_system_3"
+
+[[example]]
 name = "function_dropper_1"
 
 [[example]]
