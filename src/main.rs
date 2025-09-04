@@ -23,11 +23,11 @@ fn main() {
     objects.push(Box::new(B("Two")));
 
     let mut callbacks = Callbacks { map: HashMap::default() };
-    callbacks.register(A::handle);
-    callbacks.register(B::handle);
+    callbacks.register::<A, Print>();
+    callbacks.register::<B, Print>();
 
     for object in objects.iter_mut() {
-        assert!(callbacks.call_as_dyn(object, Print));
+        assert!(callbacks.call(object, Print));
     }
 }
 
@@ -38,22 +38,11 @@ struct Callbacks {
 }
 
 impl Callbacks {
-    fn register<T: 'static, U: 'static>(&mut self, call: fn(&mut T, U)) {
-        self.map.insert((TypeId::of::<T>(), TypeId::of::<U>()), call as usize);
+    fn register<T: Handle<U> + 'static, U: 'static>(&mut self) {
+        self.map.insert((TypeId::of::<T>(), TypeId::of::<U>()), T::handle as usize);
     }
 
-    fn call<T: 'static, U: 'static>(&self, data: &mut T, args: U) -> bool {
-        if let Some(ptr) = self.map.get(&(TypeId::of::<T>(), TypeId::of::<U>())) {
-            unsafe {
-                (transmute::<usize, fn(&mut T, U)>(*ptr))(data, args)
-            }
-            return true;
-        }
-
-        false
-    }
-
-    fn call_as_dyn<U: 'static>(&self, data: &mut Box<dyn Any>, args: U) -> bool {
+    fn call<U: 'static>(&self, data: &mut Box<dyn Any>, args: U) -> bool {
         let id = data.as_ref().type_id();
         if let Some(ptr) = self.map.get(&(id, TypeId::of::<U>())) {
             unsafe {
