@@ -18,11 +18,24 @@ fn works() {
         field_2: &'static str,
     }
 
+    trait Render {
+        fn render(&mut self, renderer: Renderer);
+    }
+
+    struct Renderer(u8);
+
+    impl Render for A {
+        fn render(&mut self, renderer: Renderer) {
+            self.field_1 += renderer.0;
+        }
+    }
+
     let def = {
         let mut define = DefineType::<A>::new();
         unsafe {
             define.field(|a| &mut a.field_1);
             define.field(|a| &mut a.field_2);
+            define.method::<Renderer>(A::render as _);
         }
         define.finish()
     };
@@ -51,12 +64,27 @@ fn works() {
 
         assert!(def.field::<usize>(&a).is_none());
     }
+
+    {
+        let mut a = A {
+            field_1: 5,
+            field_2: "Something",
+        };
+
+        assert_eq!(a.field_1, 5);
+
+        let render_a = def.method::<Renderer>().unwrap();
+        render_a(&mut a, Renderer(2));
+
+        assert_eq!(a.field_1, 7);
+    }
 }
 
 
 
 pub struct DefineType<T: 'static> {
     field_offsets: TypeMap<isize>,
+    method_ptrs: TypeMap<usize>,
     _type: std::marker::PhantomData<T>,
 }
 
@@ -64,6 +92,7 @@ impl<T: 'static> DefineType<T> {
     pub fn new() -> Self {
         Self {
             field_offsets: TypeMap::new(),
+            method_ptrs: TypeMap::new(),
             _type: std::marker::PhantomData,
         }
     }
@@ -82,10 +111,15 @@ impl<T: 'static> DefineType<T> {
         self.field_offsets.insert::<U>(offset);
     }
 
+    pub unsafe fn method<U: 'static>(&mut self, ptr: fn(&mut T, U)) {
+        self.method_ptrs.insert::<U>(ptr as usize);
+    }
+
     pub fn finish(self) -> TypeDefinition {
         TypeDefinition {
             id: TypeId::of::<T>(),
             field_offsets: self.field_offsets,
+            method_ptrs: self.method_ptrs,
         }
     }
 }
@@ -93,6 +127,7 @@ impl<T: 'static> DefineType<T> {
 pub struct TypeDefinition {
     id: TypeId,
     field_offsets: TypeMap<isize>,
+    method_ptrs: TypeMap<usize>,
 }
 
 impl TypeDefinition {
@@ -108,5 +143,10 @@ impl TypeDefinition {
     pub fn field_mut<T: 'static>(&self, data: &mut dyn Any) -> Option<&mut T> {
         let offset = *self.field_offsets.get::<T>()?;
         Some(unsafe { &mut *((data as *mut _ as *mut u8).offset(offset) as *mut T) })
+    }
+
+    pub fn method<T: 'static>(&self) -> Option<fn(&mut dyn Any, T)> {
+        let ptr = self.method_ptrs.get::<T>()?;
+        Some(unsafe { std::mem::transmute(*ptr) })
     }
 }
