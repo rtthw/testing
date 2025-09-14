@@ -22,6 +22,13 @@ fn works() {
         fn render(&mut self, renderer: Renderer);
     }
 
+    impl<T: Render + 'static> Is<dyn Render> for T {
+        #[inline(always)]
+        fn as_mut(&mut self) -> &mut (dyn Render + 'static) {
+            self
+        }
+    }
+
     struct Renderer(u8);
 
     impl Render for A {
@@ -35,7 +42,7 @@ fn works() {
         unsafe {
             define.field(|a| &mut a.field_1);
             define.field(|a| &mut a.field_2);
-            define.method::<Renderer>(A::render as _);
+            define.cast::<dyn Render>();
         }
         define.finish()
     };
@@ -73,8 +80,11 @@ fn works() {
 
         assert_eq!(a.field_1, 5);
 
-        let render_a = def.method::<Renderer>().unwrap();
-        render_a(&mut a, Renderer(2));
+        let render = def.cast::<dyn Render>(&mut a).unwrap();
+        render.render(Renderer(2));
+
+        // let render_a = def.method_mut_1::<Renderer>().unwrap();
+        // render_a(&mut a, Renderer(2));
 
         assert_eq!(a.field_1, 7);
     }
@@ -82,9 +92,13 @@ fn works() {
 
 
 
+pub trait Is<T: ?Sized> {
+    fn as_mut(&mut self) -> &mut T;
+}
+
 pub struct DefineType<T: 'static> {
     field_offsets: TypeMap<isize>,
-    method_ptrs: TypeMap<usize>,
+    cast_ptrs: TypeMap<usize>,
     _type: std::marker::PhantomData<T>,
 }
 
@@ -92,7 +106,7 @@ impl<T: 'static> DefineType<T> {
     pub fn new() -> Self {
         Self {
             field_offsets: TypeMap::new(),
-            method_ptrs: TypeMap::new(),
+            cast_ptrs: TypeMap::new(),
             _type: std::marker::PhantomData,
         }
     }
@@ -111,15 +125,18 @@ impl<T: 'static> DefineType<T> {
         self.field_offsets.insert::<U>(offset);
     }
 
-    pub unsafe fn method<U: 'static>(&mut self, ptr: fn(&mut T, U)) {
-        self.method_ptrs.insert::<U>(ptr as usize);
+    pub fn cast<U: ?Sized + 'static>(&mut self) where T: Is<U> {
+        fn inner<T: Is<U>, U: ?Sized>(data: &mut T) -> &mut U {
+            data.as_mut()
+        }
+        self.cast_ptrs.insert::<U>(inner::<T, U> as _);
     }
 
     pub fn finish(self) -> TypeDefinition {
         TypeDefinition {
             id: TypeId::of::<T>(),
             field_offsets: self.field_offsets,
-            method_ptrs: self.method_ptrs,
+            cast_ptrs: self.cast_ptrs,
         }
     }
 }
@@ -127,7 +144,7 @@ impl<T: 'static> DefineType<T> {
 pub struct TypeDefinition {
     id: TypeId,
     field_offsets: TypeMap<isize>,
-    method_ptrs: TypeMap<usize>,
+    cast_ptrs: TypeMap<usize>,
 }
 
 impl TypeDefinition {
@@ -145,8 +162,8 @@ impl TypeDefinition {
         Some(unsafe { &mut *((data as *mut _ as *mut u8).offset(offset) as *mut T) })
     }
 
-    pub fn method<T: 'static>(&self) -> Option<fn(&mut dyn Any, T)> {
-        let ptr = self.method_ptrs.get::<T>()?;
-        Some(unsafe { std::mem::transmute(*ptr) })
+    pub fn cast<'a, T: ?Sized + 'static>(&self, data: &'a mut dyn Any) -> Option<&'a mut T> {
+        let ptr = *self.cast_ptrs.get::<T>()?;
+        Some(unsafe { (std::mem::transmute::<_, fn(&mut dyn Any) -> &mut T>(ptr))(data) })
     }
 }
